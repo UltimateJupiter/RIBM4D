@@ -11,8 +11,23 @@
 #include <thrust/reduce.h>
 #include <thrust/execution_policy.h>
 
-
+texture<uchar, 3, cudaReadModeNormalizedFloat> noisy_volume_3d_tex;
 #include <math.h>
+
+
+
+void bind_texture(cudaArray* d_noisy_volume_3d) {
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<uchar>();
+    noisy_volume_3d_tex.normalized = false;                     // access with normalized texture coordinates
+    noisy_volume_3d_tex.filterMode = cudaFilterModeLinear;      // linear interpolation
+    noisy_volume_3d_tex.addressMode[0] = cudaAddressModeWrap;   // wrap texture coordinates
+    noisy_volume_3d_tex.addressMode[1] = cudaAddressModeWrap;
+    noisy_volume_3d_tex.addressMode[2] = cudaAddressModeWrap;
+
+    // --- Bind array to 3D texture
+    checkCudaErrors(cudaBindTextureToArray(noisy_volume_3d_tex, d_noisy_volume_3d, channelDesc));
+    std::cout << "Texture Memory Binded" << std::endl;
+}
 
 __global__ void k_debug_lookup_stacks(uint3float1 * d_stacks, int total_elements){
     int a = 345;
@@ -110,6 +125,24 @@ __device__ float dist(const uchar* __restrict img, const uint3 size, const uint3
     return diff/(k*k*k);
 }
 
+__device__ float dist_3d(const uint3 size, const uint3 ref, const uint3 cmp, const int k){
+    float diff(0);
+    for (int z = 0; z < k; ++z)
+        for (int y = 0; y < k; ++y)
+            for (int x = 0; x < k; ++x){
+                    int rx = max(0, min(x + ref.x, size.x - 1));
+                    int ry = max(0, min(y + ref.y, size.y - 1));
+                    int rz = max(0, min(z + ref.z, size.z - 1));
+                    int cx = max(0, min(x + cmp.x, size.x - 1));
+                    int cy = max(0, min(y + cmp.y, size.y - 1));
+                    int cz = max(0, min(z + cmp.z, size.z - 1));
+        //printf("rx: %d ry: %d rz: %d cx: %d cy: %d cz: %d\n", rx, ry, rz, cx, cy, cz);
+                    float tmp = 255 * (tex3D(noisy_volume_3d_tex, (float)rx + 0.5f, (float)ry + 0.5f, (float)rz + 0.5f) - tex3D(noisy_volume_3d_tex, (float)cx + 0.5f, (float)cy + 0.5f, (float)cz + 0.5f));
+                    diff += tmp*tmp;
+         }
+    return diff/(k*k*k);
+}
+
 __global__ void k_block_matching(const uchar* __restrict img,
                                  const uint3 size,
                                  const uint3 tsize,
@@ -142,7 +175,50 @@ __global__ void k_block_matching(const uchar* __restrict img,
                 for (int wy = wyb; wy <= wye; wy++)
                     for (int wx = wxb; wx <= wxe; wx++){
                         float w = dist(img, size, ref, make_uint3(wx, wy, wz), params.patch_size);
-                        //printf("Dist %f\n", w);
+                        // printf("Dist %f\n", w);
+
+                        if (w < params.sim_th){
+                            add_stack(&d_stacks[(Idx + (Idy + Idz* tsize.y)*tsize.x)*params.maxN],
+                                &d_nstacks[Idx + (Idy + Idz* tsize.y)*tsize.x],
+                                uint3float1(wx, wy, wz, w),
+                                params.maxN);
+                        }
+                    }
+        }
+}
+
+// non-rotational
+__global__ void k_block_matching_3d(const uint3 size,
+                                    const uint3 tsize,
+                                    const bm4d_gpu::Parameters params,
+                                    uint3float1* d_stacks,
+                                    uint* d_nstacks)
+{
+    for (int Idz = blockDim.z * blockIdx.z + threadIdx.z; Idz < tsize.z; Idz += blockDim.z*gridDim.z)
+        for (int Idy = blockDim.y * blockIdx.y + threadIdx.y; Idy < tsize.y; Idy += blockDim.y*gridDim.y)
+            for (int Idx = blockDim.x * blockIdx.x + threadIdx.x; Idx < tsize.x; Idx += blockDim.x*gridDim.x)
+            {
+
+            int x = Idx * params.step_size;
+            int y = Idy * params.step_size;
+            int z = Idz * params.step_size;
+            if (x >= size.x || y >= size.y || z >= size.z || x < 0 || y < 0 || z < 0)
+                return;
+
+            int wxb = fmaxf(0, x - params.window_size); // window x begin
+            int wyb = fmaxf(0, y - params.window_size); // window y begin
+            int wzb = fmaxf(0, z - params.window_size); // window z begin
+            int wxe = fminf(size.x - 1, x + params.window_size); // window x end
+            int wye = fminf(size.y - 1, y + params.window_size); // window y end
+            int wze = fminf(size.z - 1, z + params.window_size); // window z end
+
+            uint3 ref = make_uint3(x, y, z);
+
+            for (int wz = wzb; wz <= wze; wz++)
+                for (int wy = wyb; wy <= wye; wy++)
+                    for (int wx = wxb; wx <= wxe; wx++){
+                        float w = dist_3d(size, ref, make_uint3(wx, wy, wz), params.patch_size);
+                        // printf("Dist %f\n", w);
 
                         if (w < params.sim_th){
                             add_stack(&d_stacks[(Idx + (Idy + Idz* tsize.y)*tsize.x)*params.maxN],
@@ -155,13 +231,14 @@ __global__ void k_block_matching(const uchar* __restrict img,
 
 }
 
+// linear memory implementation
 void run_block_matching(const uchar* __restrict d_noisy_volume,
-                                                const uint3 size,
-                                                const uint3 tsize,
-                                                const bm4d_gpu::Parameters params,
-                                                uint3float1 *d_stacks,
-                                                uint *d_nstacks,
-                                                const cudaDeviceProp &d_prop)
+                        const uint3 size,
+                        const uint3 tsize,
+                        const bm4d_gpu::Parameters params,
+                        uint3float1 *d_stacks,
+                        uint *d_nstacks,
+                        const cudaDeviceProp &d_prop)
 {
     int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
     dim3 block(threads, threads, 1);
@@ -182,6 +259,36 @@ void run_block_matching(const uchar* __restrict d_noisy_volume,
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
 }
+
+// linear memory implementation
+void run_block_matching_3d(cudaArray* d_noisy_volume_3d,
+                           const uint3 size,
+                           const uint3 tsize,
+                           const bm4d_gpu::Parameters params,
+                           uint3float1 *d_stacks,
+                           uint *d_nstacks,
+                           const cudaDeviceProp &d_prop)
+{
+    bind_texture(d_noisy_volume_3d);
+    int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
+    dim3 block(threads, threads, 1);
+    int bs_x = d_prop.maxGridSize[1] < tsize.x ? d_prop.maxGridSize[1] : tsize.x;
+    int bs_y = d_prop.maxGridSize[1] < tsize.y ? d_prop.maxGridSize[1] : tsize.y;
+    dim3 grid(bs_x, bs_y, 1);
+
+    // Debug verification
+    std::cout << "Total number of reference patches " << (tsize.x*tsize.y*tsize.z) << std::endl;
+
+    k_block_matching_3d <<< grid, block >>>(size,
+                                            tsize,
+                                            params,
+                                            d_stacks,
+                                            d_nstacks);
+
+    cudaDeviceSynchronize();
+    checkCudaErrors(cudaGetLastError());
+}
+
 
 __global__ void k_nstack_to_pow(uint3float1* d_stacks, uint* d_nstacks, const int elements, const uint maxN){
     for (int i = blockIdx.x*blockDim.x + threadIdx.x; i < elements; i += blockDim.x*gridDim.x){
