@@ -29,6 +29,8 @@ public:
     {
         noisy_volume = in_noisy_volume;
         size = width * height * depth;
+        psize = p.patch_size * p.patch_size * p.patch_size;
+        pshift = ((float) p.patch_size - 1.0) / 2.0;
         int device;
         checkCudaErrors(cudaGetDevice(&device));
         checkCudaErrors(cudaGetDeviceProperties(&d_prop, device));
@@ -70,6 +72,8 @@ public:
 
     std::vector<unsigned char> run_first_step();
     void load_3d_array();
+    void init_masks();
+    void init_rot_coords();
 
  private:
     // Main variables
@@ -77,6 +81,14 @@ public:
     cudaArray *d_noisy_volume_3d;
     cudaSurfaceObject_t noisy_volume_3d_surf;
     cudaTextureObject_t noisy_volume_3d_tex;
+
+    // Masking and Rotation
+    float* dev_rel_coords;
+    float* dev_maskGaussian;
+    float* dev_maskSphere;
+    float* rel_coords;
+    float* maskGaussian;
+    float* maskSphere;
     
     // Device variables
     float* d_gathered4dstack;
@@ -85,6 +97,8 @@ public:
     float* d_group_weights;
     int width, height, depth, size;
     int twidth, theight, tdepth, tsize;
+    int psize;
+    float pshift; //shift from geometric center to reference point
 
     // Parameters for launching kernels
     dim3 block;

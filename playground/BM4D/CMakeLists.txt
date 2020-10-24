@@ -5,10 +5,12 @@ project(bm4d-gpu)
 set(CMAKE_CXX_STANDARD 14)
 
 find_package(CUDA REQUIRED)
+# find_package(Eigen3 3.3 REQUIRED)
 find_package(OpenCV REQUIRED core video videoio highgui)
 
 include_directories(include)
 include_directories(${OpenCV_INCLUDE_DIRS})
+# include_directories(../../eigen-3.3.8)
 
 set(CXX
         src/allreader.cpp

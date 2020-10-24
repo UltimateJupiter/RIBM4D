@@ -3,7 +3,6 @@
 * v.d.tananaev [at] gmail [dot] com
 */
 #include <bm4d-gpu/kernels.cuh>
-
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
 #include <thrust/copy.h>
@@ -11,10 +10,44 @@
 #include <thrust/reduce.h>
 #include <thrust/execution_policy.h>
 
-texture<uchar, 3, cudaReadModeNormalizedFloat> noisy_volume_3d_tex;
 #include <math.h>
+#include "cublas_v2.h"
 
+texture<uchar, 3, cudaReadModeNormalizedFloat> noisy_volume_3d_tex;
 
+float normal_pdf_sqr(float std, float x) {
+    // PDF of zero-mean gaussian (normalized)
+    // input x: square of distance
+    float xh = sqrt(x) / std;
+    return exp(- (xh * xh) / 2.0);
+}
+
+rotateRef make_rotateRef_angle(uint x, uint y, uint z, float val, float alpha, float beta, float gamma) {
+    rotateRef rrf;
+    rrf.x = x;
+    rrf.y = y;
+    rrf.z = z;
+    rrf.val = val;
+
+    // Compute rotation matrix
+    float sa = sin(alpha), ca = cos(alpha);
+    float sb = sin(beta),  cb = cos(beta);
+    float sg = sin(gamma), cg = cos(gamma);
+    
+    rrf.b1x = cb * cg;
+    rrf.b1y = cb * sg;
+    rrf.b1z = -sb;
+
+    rrf.b2x = sa * sb * cg - ca * sb;
+    rrf.b2y = sa * sb * sg + ca * cb;
+    rrf.b2z = sa * cb;
+
+    rrf.b3x = ca * sb * cg + sa * sg;
+    rrf.b3y = ca * sb * sg - sa * cg;
+    rrf.b3z = ca * cb;
+
+    return rrf;
+}
 
 void bind_texture(cudaArray* d_noisy_volume_3d) {
     cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<uchar>();
@@ -106,41 +139,72 @@ __device__ void add_stack(uint3float1* d_stacks,
     }
 }
 
-//TODO: Plug in optimal rotation here
+// Distance between patches
 __device__ float dist(const uchar* __restrict img, const uint3 size, const uint3 ref, const uint3 cmp, const int k){
     float diff(0);
     for (int z = 0; z < k; ++z)
         for (int y = 0; y < k; ++y)
             for (int x = 0; x < k; ++x){
-                    int rx = max(0, min(x + ref.x, size.x - 1));
-                    int ry = max(0, min(y + ref.y, size.y - 1));
-                    int rz = max(0, min(z + ref.z, size.z - 1));
-                    int cx = max(0, min(x + cmp.x, size.x - 1));
-                    int cy = max(0, min(y + cmp.y, size.y - 1));
-                    int cz = max(0, min(z + cmp.z, size.z - 1));
-        //printf("rx: %d ry: %d rz: %d cx: %d cy: %d cz: %d\n", rx, ry, rz, cx, cy, cz);
-                    float tmp = (img[(rx) + (ry)*size.x + (rz)*size.x*size.y] - img[(cx) + (cy)*size.x + (cz)*size.x*size.y]);
-                    diff += tmp*tmp;
+                int rx = max(0, min(x + ref.x, size.x - 1));
+                int ry = max(0, min(y + ref.y, size.y - 1));
+                int rz = max(0, min(z + ref.z, size.z - 1));
+                int cx = max(0, min(x + cmp.x, size.x - 1));
+                int cy = max(0, min(y + cmp.y, size.y - 1));
+                int cz = max(0, min(z + cmp.z, size.z - 1));
+                float tmp = (img[(rx) + (ry)*size.x + (rz)*size.x*size.y] - img[(cx) + (cy)*size.x + (cz)*size.x*size.y]);
+                diff += tmp*tmp;
          }
     return diff/(k*k*k);
 }
 
-__device__ float dist_3d(const uint3 size, const uint3 ref, const uint3 cmp, const int k){
+// Distance between patches using Surface reference of the 3D cudaArray (slower inference)
+__device__ float dist_3d(cudaSurfaceObject_t img_surf, const uint3 size, const uint3 ref, const uint3 cmp, const int k){
+    float diff(0);
+    uchar val_ref, val_cmp;
+    for (int z = 0; z < k; ++z)
+        for (int y = 0; y < k; ++y)
+            for (int x = 0; x < k; ++x){
+                int rx = max(0, min(x + ref.x, size.x - 1));
+                int ry = max(0, min(y + ref.y, size.y - 1));
+                int rz = max(0, min(z + ref.z, size.z - 1));
+                int cx = max(0, min(x + cmp.x, size.x - 1));
+                int cy = max(0, min(y + cmp.y, size.y - 1));
+                int cz = max(0, min(z + cmp.z, size.z - 1));
+                //printf("rx: %d ry: %d rz: %d cx: %d cy: %d cz: %d\n", rx, ry, rz, cx, cy, cz);
+                surf3Dread(&val_ref, img_surf, rx, ry, rz);
+                surf3Dread(&val_cmp, img_surf, cx, cy, cz);
+                // Read from surface
+                float tmp = (val_ref - val_cmp);
+                // Read from texture
+                // float tmp = 255 * (tex3D(noisy_volume_3d_tex, (float)rx + 0.5f, (float)ry + 0.5f, (float)rz + 0.5f) - tex3D(noisy_volume_3d_tex, (float)cx + 0.5f, (float)cy + 0.5f, (float)cz + 0.5f));
+                diff += tmp*tmp;
+         }
+    return diff/(k*k*k);
+}
+
+// TODO: Ziyi: dock with API for Euler Angle Collection, return a float4 vector (similarity, alpha, beta, gamma)
+__device__ float4 dist_rot(const uchar* __restrict img, cudaSurfaceObject_t img_surf, const uint3 size, const uint3 ref, const uint3 cmp, const int k){
+    // img is the feed in image data (probably faster for access)
+    // img_surf is the cuda array surface data (a byproduct of texture)
     float diff(0);
     for (int z = 0; z < k; ++z)
         for (int y = 0; y < k; ++y)
             for (int x = 0; x < k; ++x){
-                    int rx = max(0, min(x + ref.x, size.x - 1));
-                    int ry = max(0, min(y + ref.y, size.y - 1));
-                    int rz = max(0, min(z + ref.z, size.z - 1));
-                    int cx = max(0, min(x + cmp.x, size.x - 1));
-                    int cy = max(0, min(y + cmp.y, size.y - 1));
-                    int cz = max(0, min(z + cmp.z, size.z - 1));
-        //printf("rx: %d ry: %d rz: %d cx: %d cy: %d cz: %d\n", rx, ry, rz, cx, cy, cz);
-                    float tmp = 255 * (tex3D(noisy_volume_3d_tex, (float)rx + 0.5f, (float)ry + 0.5f, (float)rz + 0.5f) - tex3D(noisy_volume_3d_tex, (float)cx + 0.5f, (float)cy + 0.5f, (float)cz + 0.5f));
-                    diff += tmp*tmp;
+                int rx = max(0, min(x + ref.x, size.x - 1));
+                int ry = max(0, min(y + ref.y, size.y - 1));
+                int rz = max(0, min(z + ref.z, size.z - 1));
+                int cx = max(0, min(x + cmp.x, size.x - 1));
+                int cy = max(0, min(y + cmp.y, size.y - 1));
+                int cz = max(0, min(z + cmp.z, size.z - 1));
+                diff = 0;
+                // perhaps make change here? or before
          }
-    return diff/(k*k*k);
+    float4 info;
+    info.x = 0;
+    info.y = 0;
+    info.z = 0;
+    info.w = diff/(k*k*k);
+    return info;
 }
 
 __global__ void k_block_matching(const uchar* __restrict img,
@@ -179,16 +243,17 @@ __global__ void k_block_matching(const uchar* __restrict img,
 
                         if (w < params.sim_th){
                             add_stack(&d_stacks[(Idx + (Idy + Idz* tsize.y)*tsize.x)*params.maxN],
-                                &d_nstacks[Idx + (Idy + Idz* tsize.y)*tsize.x],
-                                uint3float1(wx, wy, wz, w),
-                                params.maxN);
+                                      &d_nstacks[Idx + (Idy + Idz* tsize.y)*tsize.x],
+                                      uint3float1(wx, wy, wz, w),
+                                      params.maxN);
                         }
                     }
         }
 }
 
 // non-rotational
-__global__ void k_block_matching_3d(const uint3 size,
+__global__ void k_block_matching_3d(cudaSurfaceObject_t img,
+                                    const uint3 size,
                                     const uint3 tsize,
                                     const bm4d_gpu::Parameters params,
                                     uint3float1* d_stacks,
@@ -217,18 +282,17 @@ __global__ void k_block_matching_3d(const uint3 size,
             for (int wz = wzb; wz <= wze; wz++)
                 for (int wy = wyb; wy <= wye; wy++)
                     for (int wx = wxb; wx <= wxe; wx++){
-                        float w = dist_3d(size, ref, make_uint3(wx, wy, wz), params.patch_size);
+                        float w = dist_3d(img, size, ref, make_uint3(wx, wy, wz), params.patch_size);
                         // printf("Dist %f\n", w);
 
                         if (w < params.sim_th){
                             add_stack(&d_stacks[(Idx + (Idy + Idz* tsize.y)*tsize.x)*params.maxN],
-                                &d_nstacks[Idx + (Idy + Idz* tsize.y)*tsize.x],
-                                uint3float1(wx, wy, wz, w),
-                                params.maxN);
+                                      &d_nstacks[Idx + (Idy + Idz* tsize.y)*tsize.x],
+                                      uint3float1(wx, wy, wz, w),
+                                      params.maxN);
                         }
                     }
         }
-
 }
 
 // linear memory implementation
@@ -261,7 +325,7 @@ void run_block_matching(const uchar* __restrict d_noisy_volume,
 }
 
 // linear memory implementation
-void run_block_matching_3d(cudaArray* d_noisy_volume_3d,
+void run_block_matching_3d(cudaSurfaceObject_t noisy_volume_3d_surf,
                            const uint3 size,
                            const uint3 tsize,
                            const bm4d_gpu::Parameters params,
@@ -269,7 +333,7 @@ void run_block_matching_3d(cudaArray* d_noisy_volume_3d,
                            uint *d_nstacks,
                            const cudaDeviceProp &d_prop)
 {
-    bind_texture(d_noisy_volume_3d);
+    // bind_texture(d_noisy_volume_3d);
     int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
     dim3 block(threads, threads, 1);
     int bs_x = d_prop.maxGridSize[1] < tsize.x ? d_prop.maxGridSize[1] : tsize.x;
@@ -279,7 +343,8 @@ void run_block_matching_3d(cudaArray* d_noisy_volume_3d,
     // Debug verification
     std::cout << "Total number of reference patches " << (tsize.x*tsize.y*tsize.z) << std::endl;
 
-    k_block_matching_3d <<< grid, block >>>(size,
+    k_block_matching_3d <<< grid, block >>>(noisy_volume_3d_surf,
+                                            size,
                                             tsize,
                                             params,
                                             d_stacks,

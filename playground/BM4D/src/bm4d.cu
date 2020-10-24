@@ -1,6 +1,8 @@
 /*
  * 2016, Vladislav Tananaev
  * v.d.tananaev [at] gmail [dot] com
+ * 2020, Xingyu Zhu
+ * jupiter.zhuxingyu [at] gmail [dot] com
  */
 
 #include <bm4d-gpu/bm4d.h>
@@ -29,21 +31,83 @@ void BM4D::load_3d_array() {
     surfRes.res.array.array = d_noisy_volume_3d;
     checkCudaErrors(cudaCreateSurfaceObject(&noisy_volume_3d_surf, &surfRes));
     std::cout << "Binded with surface reference" << std::endl;
+}
 
-    // Create the texture object
-    cudaResourceDesc texRes;
-    memset(&texRes, 0, sizeof(cudaResourceDesc));
-    texRes.resType = cudaResourceTypeArray;
-    texRes.res.array.array  = d_noisy_volume_3d;
-    cudaTextureDesc  texDesc;
-    memset(&texDesc, 0, sizeof(cudaTextureDesc));
-    texDesc.normalizedCoords = false;
-    texDesc.filterMode = cudaFilterModeLinear;
-    texDesc.addressMode[0] = cudaAddressModeClamp;   // clamp
-    texDesc.addressMode[1] = cudaAddressModeClamp;
-    texDesc.addressMode[2] = cudaAddressModeClamp;
-    texDesc.readMode = cudaReadModeElementType;
-    checkCudaErrors(cudaCreateTextureObject(&noisy_volume_3d_tex, &texRes, &texDesc, NULL));
+void BM4D::init_rot_coords() {
+    Stopwatch t_rot_coords(true);
+    int k = params.patch_size;
+    rel_coords = (float*) malloc(psize * 3 * sizeof(float));
+    int d;
+    for (int z = 0; z < k; ++z)
+        for (int y = 0; y < k; ++y)
+            for (int x = 0; x < k; ++x) {
+                d = x + y * k + z * k * k;
+                rel_coords[3 * d] = (float) x - pshift;
+                rel_coords[3 * d + 1] = (float) y - pshift;
+                rel_coords[3 * d + 2] = (float) z - pshift;
+            }
+    
+    checkCudaErrors(cudaMalloc((void**)&dev_rel_coords, sizeof(float) * 3 * psize));
+    checkCudaErrors(cudaMemcpy((void*)dev_rel_coords, (void*)rel_coords, sizeof(float) * 3 * psize, cudaMemcpyHostToDevice));
+    t_rot_coords.stop(); std::cout<<"Initialize reference coords took: " << t_rot_coords.getSeconds() <<std::endl;
+}
+
+void BM4D::init_masks() {
+    // Initialize the Spherical Gaussian Mask and Strict Spherical Mask
+    // Need to initialize rot coords before this step
+
+    float std = pshift * 0.75; // std of gaussian TODO: modify this constant
+    float sphere_tol = (pshift + 0.25) * (pshift + 0.25); // max distance to be included in the sphere
+    int k = params.patch_size;
+
+    Stopwatch t_init_mask(true);
+    maskGaussian = (float*) malloc(psize * sizeof(float));
+    maskSphere = (float*) malloc(psize * sizeof(float));
+    // Odd size
+    float dx, dy, dz, sqr_dist;
+    int d;
+    for (int z = 0; z < k; ++z)
+        for (int y = 0; y < k; ++y)
+            for (int x = 0; x < k; ++x) {
+                d = x + y * k + z * k * k;
+                dx = rel_coords[3 * d];
+                dy = rel_coords[3 * d + 1];
+                dz = rel_coords[3 * d + 2];
+                sqr_dist = dx*dx + dy*dy + dz*dz;
+                
+                // Gaussian
+                maskGaussian[d] = normal_pdf_sqr(std, sqr_dist);
+                
+                // Sphere
+                if (sqr_dist <= sphere_tol) maskSphere[d] = 1.0;
+                else maskSphere[d] = 0.0;
+            }
+    
+    checkCudaErrors(cudaMalloc((void**)&dev_maskGaussian, sizeof(float) * psize));
+    checkCudaErrors(cudaMemcpy((void*)dev_maskGaussian, (void*)maskGaussian, sizeof(float) * psize, cudaMemcpyHostToDevice));
+
+    checkCudaErrors(cudaMalloc((void**)&dev_maskSphere, sizeof(float) * psize));
+    checkCudaErrors(cudaMemcpy((void*)dev_maskSphere, (void*)maskSphere, sizeof(float) * psize, cudaMemcpyHostToDevice));
+    
+    t_init_mask.stop(); std::cout<<"Initialize masks took: " << t_init_mask.getSeconds() <<std::endl;
+
+    // for (int z = 0; z < k; ++z)
+    //     for (int y = 0; y < k; ++y)
+    //         for (int x = 0; x < k; ++x) {
+    //             d = x + y * k + z * k * k;
+    //             printf("%4f ", maskGaussian[d]);
+    //             if (x == k-1 && y == k-1) printf("\n");
+    //             if (x == k-1) printf("\n");
+    //         }
+
+    // for (int z = 0; z < k; ++z)
+    //     for (int y = 0; y < k; ++y)
+    //         for (int x = 0; x < k; ++x) {
+    //             d = x + y * k + z * k * k;
+    //             printf("%4f ", maskSphere[d]);
+    //             if (x == k-1 && y == k-1) printf("\n");
+    //             if (x == k-1) printf("\n");
+    //         }
 }
 
 std::vector<uchar> BM4D::run_first_step() {
@@ -53,8 +117,13 @@ std::vector<uchar> BM4D::run_first_step() {
     assert(size == noisy_volume.size());
 
     load_3d_array();
+    init_rot_coords();
+    init_masks();
+
+    return noisy_volume;
 
     // Old Memory Copy
+    // TODO: Remove after surface reference is complete
     checkCudaErrors(cudaMalloc((void**)&d_noisy_volume, sizeof(uchar) * size));
     checkCudaErrors(cudaMemcpy((void*)d_noisy_volume, (void*)noisy_volume.data(), sizeof(uchar) * size, cudaMemcpyHostToDevice));
     copyingtodevice.stop(); std::cout<<"Copying to device took:" << copyingtodevice.getSeconds() <<std::endl;
@@ -65,7 +134,7 @@ std::vector<uchar> BM4D::run_first_step() {
     // Do block matching
     Stopwatch blockmatching(true);
     run_block_matching(d_noisy_volume, im_size, tr_size, params, d_stacks, d_nstacks, d_prop);
-    run_block_matching_3d(d_noisy_volume_3d, im_size, tr_size, params, d_stacks, d_nstacks, d_prop);
+    run_block_matching_3d(noisy_volume_3d_surf, im_size, tr_size, params, d_stacks, d_nstacks, d_prop);
     blockmatching.stop();
     std::cout << "Blockmatching took: " << blockmatching.getSeconds() << std::endl;
 
