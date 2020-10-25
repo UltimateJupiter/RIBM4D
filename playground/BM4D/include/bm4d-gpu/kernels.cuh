@@ -63,20 +63,20 @@ struct rotateRef {
 
     // basis vectors after rotation
     // can also intepret as the rotation matrix since it is based on the standard basis
-    float b1x;
-    float b1y;
-    float b1z;
+    float v1x;
+    float v1y;
+    float v1z;
 
-    float b2x;
-    float b2y;
-    float b2z;
+    float v2x;
+    float v2y;
+    float v2z;
 
-    float b3x;
-    float b3y;
-    float b3z;
+    float v3x;
+    float v3y;
+    float v3z;
 
-    __host__ __device__ rotateRef() : x(0), y(0), z(0), val(-1), b1x(1), b1y(0), b1z(0), b2x(0), b2y(1), b2z(0), b3x(0), b3y(0), b3z(1){};
-    __host__ __device__ rotateRef(uint x, uint y, uint z, float val, float b1x, float b1y, float b1z, float b2x, float b2y, float b2z, float b3x, float b3y, float b3z) : x(x), y(y), z(z), val(val), b1x(b1x), b1y(b1y), b1z(b1z), b2x(b2x), b2y(b2y), b2z(b2z), b3x(b3x), b3y(b3y), b3z(b3z){}
+    __host__ __device__ rotateRef() : x(0), y(0), z(0), val(-1), v1x(1), v1y(0), v1z(0), v2x(0), v2y(1), v2z(0), v3x(0), v3y(0), v3z(1){};
+    __host__ __device__ rotateRef(uint x, uint y, uint z, float val, float v1x, float v1y, float v1z, float v2x, float v2y, float v2z, float v3x, float v3y, float v3z) : x(x), y(y), z(z), val(val), v1x(v1x), v1y(v1y), v1z(v1z), v2x(v2x), v2y(v2y), v2z(v2z), v3x(v3x), v3y(v3y), v3z(v3z){}
 };
 
 rotateRef make_rotateRef_angle(uint x, uint y, uint z, float val, float alpha, float beta, float gamma);

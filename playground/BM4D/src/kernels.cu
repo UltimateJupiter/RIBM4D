@@ -34,19 +34,32 @@ rotateRef make_rotateRef_angle(uint x, uint y, uint z, float val, float alpha, f
     float sb = sin(beta),  cb = cos(beta);
     float sg = sin(gamma), cg = cos(gamma);
     
-    rrf.b1x = cb * cg;
-    rrf.b1y = cb * sg;
-    rrf.b1z = -sb;
+    rrf.v1x = cb * cg;
+    rrf.v1y = cb * sg;
+    rrf.v1z = -sb;
 
-    rrf.b2x = sa * sb * cg - ca * sb;
-    rrf.b2y = sa * sb * sg + ca * cb;
-    rrf.b2z = sa * cb;
+    rrf.v2x = sa * sb * cg - ca * sb;
+    rrf.v2y = sa * sb * sg + ca * cb;
+    rrf.v2z = sa * cb;
 
-    rrf.b3x = ca * sb * cg + sa * sg;
-    rrf.b3y = ca * sb * sg - sa * cg;
-    rrf.b3z = ca * cb;
+    rrf.v3x = ca * sb * cg + sa * sg;
+    rrf.v3y = ca * sb * sg - sa * cg;
+    rrf.v3z = ca * cb;
 
     return rrf;
+}
+
+__device__ float rotTex3D(rotateRef rrf, int px, int py, int pz, float pshift) {
+    // must be called after the texture memory is binded with the noisy array.
+    float fpx = (float)px - pshift;
+    float fpy = (float)py - pshift;
+    float fpz = (float)pz - pshift;
+    
+    float rpx = fpx * rrf.v1x + fpy * rrf.v2x + fpz * rrf.v3x;
+    float rpy = fpy * rrf.v1y + fpy * rrf.v2y + fpz * rrf.v3y;
+    float rpz = fpz * rrf.v1z + fpy * rrf.v2z + fpz * rrf.v3z;
+
+    return tex3D(noisy_volume_3d_tex, rpx + 0.5f, rpy + 0.5f, rpz + 0.5f) * 255;
 }
 
 void bind_texture(cudaArray* d_noisy_volume_3d) {
@@ -107,6 +120,7 @@ __device__ __inline__ uint flp2(uint x)
     return x - (x >> 1);
 }
 
+// need change to adapt rrf
 __device__ void add_stack(uint3float1* d_stacks,
                           uint* d_nstacks,
                           const uint3float1 val,
@@ -251,7 +265,7 @@ __global__ void k_block_matching(const uchar* __restrict img,
         }
 }
 
-// non-rotational
+// non-rotational, TODO: remove after done
 __global__ void k_block_matching_3d(cudaSurfaceObject_t img,
                                     const uint3 size,
                                     const uint3 tsize,
@@ -324,7 +338,7 @@ void run_block_matching(const uchar* __restrict d_noisy_volume,
     checkCudaErrors(cudaGetLastError());
 }
 
-// linear memory implementation
+// surface implementation, no rotation
 void run_block_matching_3d(cudaSurfaceObject_t noisy_volume_3d_surf,
                            const uint3 size,
                            const uint3 tsize,
@@ -460,6 +474,7 @@ void gather_cubes(const uchar* __restrict img,
     checkCudaErrors(cudaGetLastError());
 }
 
+// support 4x4x4 patchsize
 __global__ void dct3d(float* d_gathered4dstack, int patch_size, uint gather_stacks_sum){
     for(int cuIdx=blockIdx.x; cuIdx < gather_stacks_sum; cuIdx+=blockDim.x*gridDim.x){
         if( cuIdx >= gather_stacks_sum) return;

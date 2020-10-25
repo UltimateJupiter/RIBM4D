@@ -26,7 +26,7 @@ struct Parameters {
 
   // Fixed in current implementation
   // TODO: check what's up here
-  const int patch_size{5};  // Patch size
+  const int patch_size{4};  // Patch size
   const int maxN{16};       // Maximal number of the patches in one group
 
   bool parse(const int argc, const char* const* const argv) {
