@@ -40,17 +40,27 @@ public:
         tdepth = std::floor((depth - 1) / params.step_size + 1);
         tsize = twidth * theight * tdepth;
 
+        // TODO: Need change
+        fft_patch_size = psize;
+
         // uint3float1* tmp_arr = new uint3float1[params.maxN*tsize];
         checkCudaErrors(cudaMalloc((void**)&d_stacks, sizeof(uint3float1) * (params.maxN * tsize)));
+        checkCudaErrors(cudaMalloc((void**)&d_stacks_rot, sizeof(rotateRef) * (params.maxN * tsize)));
         // std::cout << "Allocated " << sizeof(uint3float1)*(params.maxN*tsize) << "
         // bytes for d_stacks" << std::endl; checkCudaErrors(cudaMemcpy(d_stacks,
         // tmp_arr, sizeof(uint3float1)*params.maxN*tsize, cudaMemcpyHostToDevice));
         // delete[] tmp_arr;
 
         checkCudaErrors(cudaMalloc((void**)&d_nstacks, sizeof(uint) * (tsize)));
+        checkCudaErrors(cudaMalloc((void**)&d_nstacks_rot, sizeof(uint) * (tsize)));
         checkCudaErrors(cudaMemset(d_nstacks, 0, sizeof(uint) * tsize));
-        // std::cout << "Allocated " << (tsize) << " elements for d_nstacks" <<
-        // std::endl;
+        std::cout << "Allocated " << (tsize) << " elements for d_nstacks" << std::endl;
+
+        checkCudaErrors(cudaMalloc((void**)&d_shfft_res, fft_patch_size * tsize * sizeof(float)));
+        std::cout << "Allocated " << (fft_patch_size * tsize) << " elements for shfft" << std::endl;
+
+        init_masks();
+        init_rot_coords();
     }
 
     inline ~BM4D() {
@@ -67,13 +77,72 @@ public:
             checkCudaErrors(cudaFree(d_gathered4dstack));
             // std::cout << "Cleaned up bytes of d_gathered4dstack" << std::endl;
         }
+        if (d_shfft_res) {
+            checkCudaErrors(cudaFree(d_shfft_res));
+        }
         cudaDeviceReset();
     };
+    
+    void init_masks() {
+        float std = pshift * 0.75; // std of gaussian TODO: modify this constant
+        float sphere_tol = (pshift + 0.25) * (pshift + 0.25); // max distance to be included in the sphere
+        int k = params.patch_size;
 
-    std::vector<unsigned char> run_first_step();
+        Stopwatch t_init_mask(true);
+        maskGaussian = (float*) malloc(psize * sizeof(float));
+        maskSphere = (float*) malloc(psize * sizeof(float));
+        // Odd size
+        float dx, dy, dz, sqr_dist;
+        int d;
+        for (int z = 0; z < k; ++z)
+            for (int y = 0; y < k; ++y)
+                for (int x = 0; x < k; ++x) {
+                    d = x + y * k + z * k * k;
+                    dx = float(x) - pshift;
+                    dy = float(y) - pshift;
+                    dz = float(z) - pshift;
+                    sqr_dist = dx*dx + dy*dy + dz*dz;
+                    
+                    // Gaussian
+                    maskGaussian[d] = normal_pdf_sqr(std, sqr_dist);
+                    
+                    // Sphere
+                    if (sqr_dist <= sphere_tol) maskSphere[d] = 1.0;
+                    else maskSphere[d] = 0.0;
+                }
+        
+        checkCudaErrors(cudaMalloc((void**)&dev_maskGaussian, sizeof(float) * psize));
+        checkCudaErrors(cudaMemcpy((void*)dev_maskGaussian, (void*)maskGaussian, sizeof(float) * psize, cudaMemcpyHostToDevice));
+
+        checkCudaErrors(cudaMalloc((void**)&dev_maskSphere, sizeof(float) * psize));
+        checkCudaErrors(cudaMemcpy((void*)dev_maskSphere, (void*)maskSphere, sizeof(float) * psize, cudaMemcpyHostToDevice));
+        
+        t_init_mask.stop(); std::cout<<"Initialize masks took: " << t_init_mask.getSeconds() <<std::endl;
+        // visualize_mask(dev_maskGaussian, params.patch_size);
+        // visualize_mask(dev_maskSphere, params.patch_size);
+    };
+
+    void init_rot_coords() {
+        Stopwatch t_rot_coords(true);
+        int k = params.patch_size;
+        rel_coords = (float*) malloc(psize * 3 * sizeof(float));
+        int d;
+        for (int z = 0; z < k; ++z)
+            for (int y = 0; y < k; ++y)
+                for (int x = 0; x < k; ++x) {
+                    d = x + y * k + z * k * k;
+                    rel_coords[3 * d] = (float) x - pshift;
+                    rel_coords[3 * d + 1] = (float) y - pshift;
+                    rel_coords[3 * d + 2] = (float) z - pshift;
+                }
+        
+        checkCudaErrors(cudaMalloc((void**)&dev_rel_coords, sizeof(float) * 3 * psize));
+        checkCudaErrors(cudaMemcpy((void*)dev_rel_coords, (void*)rel_coords, sizeof(float) * 3 * psize, cudaMemcpyHostToDevice));
+        t_rot_coords.stop(); std::cout<<"Initialize reference coords took: " << t_rot_coords.getSeconds() <<std::endl;
+    }
+
     void load_3d_array();
-    void init_masks();
-    void init_rot_coords();
+    std::vector<unsigned char> run_first_step();
 
  private:
     // Main variables
@@ -89,11 +158,18 @@ public:
     float* rel_coords;
     float* maskGaussian;
     float* maskSphere;
-    
+
+    // Previously Computed FFT arrays (Spherical Harmonics Representation)
+    // float** shfftPatches;
+    float* d_shfft_res;
+    int fft_patch_size;
+
     // Device variables
     float* d_gathered4dstack;
     uint3float1* d_stacks;
+    rotateRef* d_stacks_rot;
     uint* d_nstacks;
+    uint* d_nstacks_rot;
     float* d_group_weights;
     int width, height, depth, size;
     int twidth, theight, tdepth, tsize;

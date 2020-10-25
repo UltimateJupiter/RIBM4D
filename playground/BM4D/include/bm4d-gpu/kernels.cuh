@@ -6,6 +6,7 @@
 #include <cassert>
 #include <iostream>
 #include <vector>
+#include <math.h>
 
 #include <cuda.h>
 #include <cuda_runtime_api.h>
@@ -35,7 +36,9 @@ struct uint3float1 {
 inline uint3float1 make_uint3float1(uint x, uint y, uint z, float val) {
     return uint3float1(x, y, z, val);
 }
-inline uint3float1 make_uint3float1(uint3 c, float val) { return uint3float1(c.x, c.y, c.z, val); }
+inline uint3float1 make_uint3float1(uint3 c, float val) {
+    return uint3float1(c.x, c.y, c.z, val);
+}
 
 // struct supporting message passing on Euler angles for rotations
 struct uint3float4 {
@@ -52,7 +55,9 @@ struct uint3float4 {
 inline uint3float4 make_uint3float4(uint x, uint y, uint z, float val, float alpha, float beta, float gamma) {
     return uint3float4(x, y, z, val, alpha, beta, gamma);
 }
-inline uint3float4 make_uint3float4(uint3 c, float val, float alpha, float beta, float gamma) { return uint3float4(c.x, c.y, c.z, val, alpha, beta, gamma); }
+inline uint3float4 make_uint3float4(uint3 c, float val, float alpha, float beta, float gamma) {
+    return uint3float4(c.x, c.y, c.z, val, alpha, beta, gamma);
+}
 
 // Referencing a patch with rotation (containing x, y, z, match score, and basis for optimal rotation)
 struct rotateRef {
@@ -78,19 +83,56 @@ struct rotateRef {
     __host__ __device__ rotateRef() : x(0), y(0), z(0), val(-1), v1x(1), v1y(0), v1z(0), v2x(0), v2y(1), v2z(0), v3x(0), v3y(0), v3z(1){};
     __host__ __device__ rotateRef(uint x, uint y, uint z, float val, float v1x, float v1y, float v1z, float v2x, float v2y, float v2z, float v3x, float v3y, float v3z) : x(x), y(y), z(z), val(val), v1x(v1x), v1y(v1y), v1z(v1z), v2x(v2x), v2y(v2y), v2z(v2z), v3x(v3x), v3y(v3y), v3z(v3z){}
 };
+inline rotateRef make_rotateRef(uint x, uint y, uint z, float val, float alpha, float beta, float gamma) {
+    rotateRef rrf;
+    rrf.x = x;
+    rrf.y = y;
+    rrf.z = z;
+    rrf.val = val;
 
-rotateRef make_rotateRef_angle(uint x, uint y, uint z, float val, float alpha, float beta, float gamma);
+    // Compute rotation matrix
+    float sa = sin(alpha), ca = cos(alpha);
+    float sb = sin(beta),  cb = cos(beta);
+    float sg = sin(gamma), cg = cos(gamma);
+    
+    rrf.v1x = cb * cg;
+    rrf.v1y = cb * sg;
+    rrf.v1z = -sb;
 
-void run_block_matching(const uchar* __restrict d_noisy_volume, const uint3 size, const uint3 tsize,
+    rrf.v2x = sa * sb * cg - ca * sb;
+    rrf.v2y = sa * sb * sg + ca * cb;
+    rrf.v2z = sa * cb;
+
+    rrf.v3x = ca * sb * cg + sa * sg;
+    rrf.v3y = ca * sb * sg - sa * cg;
+    rrf.v3z = ca * cb;
+
+    return rrf;
+}
+
+
+void run_fft_precomp(const uchar* __restrict d_noisy_volume,
+                     const uint3 size,
+                     const uint3 tshape,
+                     const bm4d_gpu::Parameters params,
+                     float *d_shfft_res,
+                     const cudaDeviceProp &d_prop);
+
+void run_block_matching(const uchar* __restrict d_noisy_volume, const uint3 size, const uint3 tshape,
                         const bm4d_gpu::Parameters params, uint3float1* d_stacks, uint* d_nstacks,
                         const cudaDeviceProp& d_prop);
 
-void run_block_matching_3d(cudaSurfaceObject_t noisy_volume_3d_surf, const uint3 size, const uint3 tsize,
-                           const bm4d_gpu::Parameters params, uint3float1* d_stacks, uint* d_nstacks,
-                           const cudaDeviceProp& d_prop);
-                        
+void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
+                            const float* __restrict d_shfft_res,
+                            const uint3 size,
+                            const uint3 tshape,
+                            const bm4d_gpu::Parameters params,
+                            rotateRef *d_stacks_rot,
+                            uint *d_nstacks_rot,
+                            int fft_patch_size,
+                            const cudaDeviceProp &d_prop);
 // Gather cubes together
-void gather_cubes(const uchar* __restrict img, const uint3 size, const uint3 tsize,
+void gather_cubes(const uchar* __restrict img, const uint3 size, const uint3 tshape,
                   const bm4d_gpu::Parameters params, uint3float1*& d_stacks, uint* d_nstacks,
                   float*& d_gathered4dstack, uint& gather_stacks_sum, const cudaDeviceProp& d_prop);
 // Perform 3D DCT
@@ -98,21 +140,21 @@ void run_dct3d(float* d_gathered4dstack, uint gather_stacks_sum, int patch_size,
                const cudaDeviceProp& d_prop);
 // Do WHT in 4th dim + Hard Thresholding + IWHT
 void run_wht_ht_iwht(float* d_gathered4dstack, uint gather_stacks_sum, int patch_size,
-                     uint* d_nstacks, const uint3 tsize, float*& d_group_weights,
+                     uint* d_nstacks, const uint3 tshape, float*& d_group_weights,
                      const bm4d_gpu::Parameters params, const cudaDeviceProp& d_prop);
 // Perform inverse 3D DCT
 void run_idct3d(float* d_gathered4dstack, uint gather_stacks_sum, int patch_size,
                 const cudaDeviceProp& d_prop);
 // Aggregate
-void run_aggregation(float* final_image, const uint3 size, const uint3 tsize,
+void run_aggregation(float* final_image, const uint3 size, const uint3 tshape,
                      const float* d_gathered4dstack, uint3float1* d_stacks, uint* d_nstacks,
                      float* group_weights, const bm4d_gpu::Parameters params, int gather_stacks_sum,
                      const cudaDeviceProp& d_prop);
+
 void debug_kernel(float* tmp);
 
 float normal_pdf_sqr(float std, float x);
 
-void load_noisy_3d(float tmp);
+void visualize_mask(float* mask, int k);
 
-void print_array_debug(const uchar* __restrict x);
-void print_3darray_debug(cudaArray* x);
+void load_noisy_3d(float tmp);
