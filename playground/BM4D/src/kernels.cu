@@ -70,9 +70,9 @@ __device__ float rotTex3D(rotateRef rrf, int px, int py, int pz, float pshift) {
     float fpy = (float)py - pshift;
     float fpz = (float)pz - pshift;
     
-    float rpx = fpx * rrf.v1x + fpy * rrf.v2x + fpz * rrf.v3x;
-    float rpy = fpy * rrf.v1y + fpy * rrf.v2y + fpz * rrf.v3y;
-    float rpz = fpz * rrf.v1z + fpy * rrf.v2z + fpz * rrf.v3z;
+    float rpx = fpx * rrf.v1x + fpx * rrf.v2x + fpx * rrf.v3x + pshift + rrf.x;
+    float rpy = fpy * rrf.v1y + fpy * rrf.v2y + fpy * rrf.v3y + pshift + rrf.y;
+    float rpz = fpz * rrf.v1z + fpz * rrf.v2z + fpz * rrf.v3z + pshift + rrf.z;
 
     return tex3D(noisy_volume_3d_tex, rpx + 0.5f, rpy + 0.5f, rpz + 0.5f) * 255;
 }

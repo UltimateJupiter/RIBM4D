@@ -118,8 +118,8 @@ public:
         checkCudaErrors(cudaMemcpy((void*)dev_maskSphere, (void*)maskSphere, sizeof(float) * psize, cudaMemcpyHostToDevice));
         
         t_init_mask.stop(); std::cout<<"Initialize masks took: " << t_init_mask.getSeconds() <<std::endl;
-        // visualize_mask(dev_maskGaussian, params.patch_size);
-        // visualize_mask(dev_maskSphere, params.patch_size);
+        visualize_mask(dev_maskGaussian, params.patch_size);
+        visualize_mask(dev_maskSphere, params.patch_size);
     };
 
     void init_rot_coords() {
