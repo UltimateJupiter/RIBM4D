@@ -36,6 +36,6 @@
 #ifndef _OURMODS_H
 #define _OURMODS_H
 
-__device__ const double *get_mods( int ) ;
+__device__ double *get_mods( int ) ;
 
 #endif /* _OURMODS_H */

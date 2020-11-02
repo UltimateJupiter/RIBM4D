@@ -35,7 +35,7 @@
   #ifndef _OURPERMS_H
   #define _OURPERMS_H
   
-  __device__ const int *get_perm( int ) ;
+  __device__ int *get_perm( int ) ;
   
   #endif /* _OURPERMS_H */
   
