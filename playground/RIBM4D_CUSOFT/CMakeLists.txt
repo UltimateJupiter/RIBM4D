@@ -9,13 +9,13 @@ find_package(OpenCV REQUIRED core video videoio highgui)
 
 include_directories(include)
 include_directories(${OpenCV_INCLUDE_DIRS})
-# include_directories(../../eigen-3.3.8)
 
 set(CXX
         src/allreader.cpp
         src/main.cpp
         )
 set(CU  src/kernels.cu
+        src/cusoft_kernels.cu
         src/bm4d.cu
         )
 set(H
@@ -23,10 +23,11 @@ set(H
         include/bm4d-gpu/bm4d.h
         include/bm4d-gpu/helper_cuda.h
         include/bm4d-gpu/helper_string.h
-        include/bm4d-gpu/kernels.cuh
         include/bm4d-gpu/parameters.h
         include/bm4d-gpu/stopwatch.hpp
         include/bm4d-gpu/utils.h
+        include/bm4d-gpu/kernels.cuh
+        include/cusoft/cusoft_kernels.cuh
         )
 
 cuda_add_executable(bm4d-gpu ${CXX} ${CU} ${H})

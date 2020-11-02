@@ -89,7 +89,8 @@ void run_fft_precomp(const uchar* __restrict d_noisy_volume,
                      const uint3 size,
                      const uint3 tshape,
                      const bm4d_gpu::Parameters params,
-                     float *d_shfft_res,
+                     double *d_fftCoefR,
+                     double *d_fftCoefI,
                      const cudaDeviceProp &d_prop);
 
 void run_block_matching(const uchar* __restrict d_noisy_volume, const uint3 size, const uint3 tshape,
@@ -97,7 +98,8 @@ void run_block_matching(const uchar* __restrict d_noisy_volume, const uint3 size
                         const cudaDeviceProp& d_prop);
 
 void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
-                            const float* __restrict d_shfft_res,
+                            const double* __restrict d_fftCoefR,
+                            const double* __restrict d_fftCoefI,
                             const uint3 size,
                             const uint3 tshape,
                             const bm4d_gpu::Parameters params,
@@ -132,3 +134,5 @@ float normal_pdf_sqr(float std, float x);
 void visualize_mask(float* mask, int k);
 
 void load_noisy_3d(float tmp);
+
+size_t checkGpuMem();

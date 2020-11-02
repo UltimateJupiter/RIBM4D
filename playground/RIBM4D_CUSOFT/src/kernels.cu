@@ -22,6 +22,18 @@ float normal_pdf_sqr(float std, float x) {
     return exp(- (xh * xh) / 2.0);
 }
 
+size_t checkGpuMem()
+{
+    float free_m,total_m,used_m;
+    size_t free_t,total_t;
+    cudaMemGetInfo(&free_t,&total_t);
+    free_m =(float)free_t/1048576.0 ;
+    total_m=(float)total_t/1048576.0;
+    used_m=total_m-free_m;
+    printf ( "=== GPU RAM ===\n mem free  %lu \t- %f MB\n mem total %lu \t- %f MB\n mem used %f MB\n===============\n\n",free_t,free_m,total_t,total_m,used_m);
+    return free_t;
+}
+
 __global__ void vis_mask(float* mask, int k) {
     int d;
     for (int z = 0; z < k; ++z)
@@ -95,7 +107,8 @@ __global__ void k_run_fft_precomp(const uchar* __restrict img,
                                   const uint3 size,
                                   const uint3 tshape,
                                   const bm4d_gpu::Parameters params,
-                                  float* d_shfft_res)
+                                  double *d_fftCoefR,
+                                  double *d_fftCoefI)
 {
 
     for (int Idz = blockDim.z * blockIdx.z + threadIdx.z; Idz < tshape.z; Idz += blockDim.z*gridDim.z)
@@ -116,7 +129,8 @@ void run_fft_precomp(const uchar* __restrict d_noisy_volume,
                      const uint3 size,
                      const uint3 tshape,
                      const bm4d_gpu::Parameters params,
-                     float *d_shfft_res,
+                     double *d_fftCoefR,
+                     double *d_fftCoefI,
                      const cudaDeviceProp &d_prop)
 {
     int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
@@ -132,7 +146,8 @@ void run_fft_precomp(const uchar* __restrict d_noisy_volume,
                                          size,
                                          tshape,
                                          params,
-                                         d_shfft_res);
+                                         d_fftCoefR,
+                                         d_fftCoefI);
 
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
