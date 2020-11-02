@@ -1,5 +1,6 @@
 #include <cusoft/cusoft_kernels.cuh>
 #include <cusoft/CUcospmls.cuh>
+#include <cusoft/CUFST_semi_memo.cuh>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -134,21 +135,45 @@ __device__ float4 soft_corr(double *sigR, double *sigI,
     int bwIn, int bwOut, int degLim)
 {
     printf("output from device function\n");
-
+    int i;
     int tmp, maxloc, ii, jj, kk ;
     int n = bwIn * 2; // input shape
 
-    for (int i = 0; i < 5; i++)
+    for (i = 0; i < 5; i++)
     {
         printf("%f\n", patR[i]);
         printf("%f\n", sigR[i]);
     }
 
     printf("Generating seminaive_naive tables...\n");
-    seminaive_naive_table = SemiNaive_Naive_Pml_Table(bwIn, bwIn,
+    INPLACE_SemiNaive_Naive_Pml_Table(bwIn,
+        bwIn,
+        seminaive_naive_table,
         seminaive_naive_tablespace,
         workspace2);
+    
+    printf("now taking spherical transform of signal\n");
+    PREALLOC_FST_semi_memo(sigR, sigI,
+            sigCoefR, sigCoefI,
+            n, seminaive_naive_table,
+            workspace2, 1, bwIn,
+            cos_even);
+    if ( 1 )
+        for(i=0;i<5;i++)
+        printf("%d\t%f\t%f\n",i,sigCoefR[i],sigCoefI[i]);
+    
+    printf("now taking spherical transform of pattern\n");
+    PREALLOC_FST_semi_memo(patR, patI,
+            patCoefR, patCoefI,
+            n, seminaive_naive_table,
+            workspace2, 1, bwIn,
+            cos_even);
 
+    if ( 1 )
+        for(i=0;i<5;i++)
+        printf("%d\t%f\t%f\n",i,patCoefR[i],patCoefI[i]);
+
+    
     float4 ret;
     return ret;
 }

@@ -207,3 +207,159 @@ __device__ void Pmm_L2( int m,
 
 }
 
+__device__ void P_eval(int m,
+	    double *coeffs,
+	    double *eval_args,
+	    double *result,
+	    double *workspace,
+	    int bw)
+{
+    double *prev, *prevprev, *temp1, *temp2, *temp3, *temp4, *x_i;
+    int i, j, n;
+    double splat;
+
+    prevprev = workspace;
+    prev = prevprev + (2*bw);
+    temp1 = prev + (2*bw);
+    temp2 = temp1 + (2*bw);
+    temp3 = temp2 + (2*bw);
+    temp4 = temp3 + (2*bw);
+    x_i = temp4 + (2*bw);
+
+    n = 2*bw;
+
+    /* now get the evaluation nodes */
+    EvalPts(n,x_i);
+
+    /*   for(i=0;i<n;i++)
+      fprintf(stderr,"in P_eval evalpts[%d] = %lf\n", i, x_i[i]);
+      */   
+    for (i=0; i<n; i++) 
+      prevprev[i] = 0.0;
+
+    if (m == 0) {
+	for (i=0; i<n; i++) {
+	  prev[i] = 0.707106781186547; /* sqrt(1/2) */
+
+	  /* now mult by first coeff and add to result */
+	  result[i] = coeffs[0] * prev[i];
+	}
+    }
+    else {
+	Pmm_L2(m, eval_args, n, prev);
+	splat = coeffs[0];
+	for (i=0; i<n; i++)
+	  result[i] = splat * prev[i];
+    }
+
+    for (i=0; i<bw-m-1; i++) {
+	vec_mul(L2_cn(m,m+i),prevprev,temp1,n);
+	vec_pt_mul(prev, x_i, temp2, n);
+	vec_mul(L2_an(m,m+i), temp2, temp3, n);
+	vec_add(temp3, temp1, temp4, n); /* temp4 now contains P(m,m+i+1) */
+	/* now add weighted P(m,m+i+1) to the result */
+	splat = coeffs[i+1];
+	for (j=0; j<n; j++)
+	  result[j] += splat * temp4[j];
+	memcpy(prevprev, prev, sizeof(double) * n);
+	memcpy(prev, temp4, sizeof(double) * n);
+    }
+
+}
+
+
+/*****************************************************************
+
+  Given bandwidth bw, seanindex(m,l,bw) will give the position of the
+  coefficient f-hat(m,l) in the one-row array that Sean stores the spherical
+  coefficients. This is needed to help preserve the symmetry that the
+  coefficients have: (l = degree, m = order, and abs(m) <= l)
+
+  f-hat(l,-m) = (-1)^m * conjugate( f-hat(l,m) )
+
+  Thanks for your help Mark!
+
+  ******************************************************************/
+
+__device__ int seanindex(int m,
+	      int l,
+	      int bw)
+{     
+  int bigL;
+
+  bigL = bw - 1;
+
+  if( m >= 0 )
+    return( m * ( bigL + 1 ) - ( ( m * (m - 1) ) /2 ) + ( l - m ) );
+  else
+    return( ( ( bigL * ( bigL + 3 ) ) /2 ) + 1 +
+	    ( ( bigL + m ) * ( bigL + m + 1 ) / 2 ) + ( l - abs( m ) ) );
+}
+
+
+/*****************************************************************
+  just like seanindex(m,l,bw) but returns the array coordinates
+  for (l,m) AND (l,-m)
+
+  ASSUMING THE M IS GREATER THAN 0 !!!
+
+  this is used in the FST_semi routine
+
+  loc is a 2 element integer array
+
+  ******************************************************************/
+
+__device__ void seanindex2(int m,
+		int l,
+		int bw,
+		int *loc)
+{     
+  int bigL;
+  
+  bigL = bw - 1;
+  
+  /* first index for (l,m) */
+  loc[0] = m * ( bigL + 1 ) - ( ( m * (m - 1) ) /2 ) + ( l - m );
+  
+  /* second index for (l,-m) */
+  loc[1] = ( ( bigL * ( bigL + 3 ) ) /2 ) + 1 +
+    ( ( bigL - m ) * ( bigL - m + 1 ) / 2 ) + ( l -  m ) ;
+
+}
+
+
+/****************************************************
+
+  just a function to transpose a square array IN PLACE !!!
+
+  array = array to transpose
+  size = dimension of array (assuming the array is square, size * size)
+
+  **************************************************/
+
+__device__ void transpose(double *array,
+	       int size)
+{
+  register int i, j;
+  double t1, t2, t3, t4;
+
+  for(i = 0; i < size; i += 2)
+    {
+      t1 = array[(i * size) + i + 1];
+      array[(i * size) + i + 1] = array[((i + 1) * size) + i];
+      array[((i + 1) * size) + i] = t1;
+      for(j = (i + 2); j < size; j += 2)
+	{
+	  t1 = array[(i*size)+j]; t2 = array[(i*size)+j+1];
+	  t3 = array[((i+1)*size)+j]; t4 = array[((i+1)*size)+j+1];
+	  array[(i*size)+j] = array[(j*size)+i];
+	  array[(i*size)+j+1] = array[((j+1)*size)+i];
+	  array[((i+1)*size)+j] = array[(j*size)+i+1];
+	  array[((i+1)*size)+j+1] = array[((j+1)*size)+i+1];
+	  array[(j*size)+i] = t1;
+	  array[((j+1)*size)+i] = t2;
+	  array[(j*size)+i+1] = t3;
+	  array[((j+1)*size)+i+1] = t4;
+	}
+    }
+}

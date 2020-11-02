@@ -64,4 +64,24 @@ __device__ void Pmm_L2( int ,
 		    double * ,
 		    int ,
 		    double * ) ;
+
+__device__ void P_eval( int ,
+		    double * ,
+		    double * ,
+		    double * ,
+		    double * ,
+		    int ) ;
+
+__device__ int seanindex( int,
+		      int,
+		      int );
+
+__device__ void seanindex2( int ,
+			int ,
+			int ,
+			int *);
+
+__device__ void transpose( double *,
+		       int );
+
 #endif /* _S2_PRIMITIVE_H */

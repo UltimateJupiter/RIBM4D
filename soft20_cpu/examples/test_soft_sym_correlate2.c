@@ -158,6 +158,10 @@ int main ( int argc,
 						    seminaive_naive_tablespace,
 						    workspace2);
 
+  for (int i = 0; i < 5; i++)
+  {
+      printf("%f\n", seminaive_naive_table[0][i]);
+  }
   printf("Reading in signal file\n");
   /* read in SIGNAL samples */
   /* first the signal */

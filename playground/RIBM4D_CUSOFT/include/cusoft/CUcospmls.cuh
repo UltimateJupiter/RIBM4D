@@ -96,6 +96,12 @@ __device__ double **SemiNaive_Naive_Pml_Table( int ,
 					   double * ,
 					   double * ) ;
 
+__device__ void INPLACE_SemiNaive_Naive_Pml_Table( int ,
+					   int ,
+					   double ** ,
+					   double * ,
+					   double * ) ;
+
 __device__ double **Transpose_SemiNaive_Naive_Pml_Table( double ** , 
 						     int ,
 						     int ,

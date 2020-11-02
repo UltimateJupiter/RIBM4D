@@ -731,6 +731,59 @@ __device__   int Transpose_RowSize(int row,
      return seminaive_naive_table;
    
    }
+
+   __device__ void INPLACE_SemiNaive_Naive_Pml_Table(int bw,
+              int m,
+              double **seminaive_naive_table,
+              double *resultspace,
+              double *workspace)
+   {
+     int i;
+     int  lastspace;
+   
+     seminaive_naive_table[0] = resultspace;
+     
+     for (i=1; i<m; i++)
+       {
+         seminaive_naive_table[i] = seminaive_naive_table[i - 1] +
+                             TableSize(i-1,bw);
+       }
+   
+     if( m == 0)
+       {
+         lastspace = 0;
+         for (i=m+1; i<bw; i++)
+     { 
+       seminaive_naive_table[i] = seminaive_naive_table[i - 1] +
+         (2 * bw * (bw - (i - 1)));
+     }
+       }
+     else
+       {
+         lastspace = TableSize(m-1,bw);
+         seminaive_naive_table[m] = seminaive_naive_table[m-1] +
+     lastspace;
+         for (i=m+1; i<bw; i++)
+     { 
+       seminaive_naive_table[i] = seminaive_naive_table[i - 1] +
+         (2 * bw * (bw - (i - 1)));
+     }
+       }
+   
+     /* now load up the array with CosPml and CosGml values */
+     for (i=0; i<m; i++)
+       {
+         CosPmlTableGen(bw, i, seminaive_naive_table[i], workspace);
+       }
+   
+     /* now load up pml values */
+     for(i=m; i<bw; i++)
+       {
+         PmlTableGen(bw, i, seminaive_naive_table[i], workspace);
+       }
+   
+     /* that's it */
+   }
    
    
    /************************************************************************/
