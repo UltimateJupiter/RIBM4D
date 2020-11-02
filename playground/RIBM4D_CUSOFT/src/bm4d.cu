@@ -46,22 +46,29 @@ std::vector<uchar> BM4D::run_first_step() {
     // Pre-compute spehrical representation
     Stopwatch t_pre_comp_fft(true);
     std::cout << "\nComputing spherical representation of patches" << std::endl;
-    run_fft_precomp(d_noisy_volume, imshape, tshape, params, d_fftCoefR, d_fftCoefI, d_prop);
+    run_fft_precomp(d_noisy_volume, imshape, tshape, params, d_sigR, d_sigI, d_prop);
     t_pre_comp_fft.stop();
     std::cout << "took: " << t_pre_comp_fft.getSeconds() << std::endl;
     
-    sample_run(d_fftCoefR, d_fftCoefI,
-               d_so3CoefR, d_so3CoefI,
-               d_rdata, d_idata,
-               d_workspace1, d_workspace2,
-               d_cos_even,
-               d_seminaive_naive_table,
-               bw, degLim,
-               wsp1_bsize, wsp2_bsize,
-               ridata_bsize,
-               so3Coef_bsize,
-               SNT_bsize,
-               fft_patch_size);
+    sample_run(d_sigR, d_sigI,
+        d_so3SigR, d_so3SigI,
+        d_workspace1, d_workspace2,
+        d_sigCoefR, d_sigCoefI,
+        d_patCoefR, d_patCoefI,
+        d_so3CoefR, d_so3CoefI,
+        d_seminaive_naive_tablespace,
+        d_cos_even,
+        d_seminaive_naive_table,
+        bwIn, bwOut, degLim,
+        sig_patch_size,
+        wsp1_bsize,
+        wsp2_bsize,
+        sigpatCoef_bsize,
+        so3Coef_bsize,
+        so3Sig_bsize,
+        SNTspace_bsize,
+        SNT_bsize,
+        cos_even_bsize);
     
     
     return noisy_volume;
@@ -69,7 +76,7 @@ std::vector<uchar> BM4D::run_first_step() {
     Stopwatch blockmatching(true);
     std::cout << "\nStart blockmatching" << std::endl;
     run_block_matching(d_noisy_volume, imshape, tshape, params, d_stacks, d_nstacks, d_prop);
-    run_block_matching_rot(d_noisy_volume, d_fftCoefR, d_fftCoefI, imshape, tshape, params, d_stacks_rot, d_nstacks_rot, fft_patch_size, d_prop);
+    run_block_matching_rot(d_noisy_volume, d_sigR, d_sigI, imshape, tshape, params, d_stacks_rot, d_nstacks_rot, sig_patch_size, d_prop);
     blockmatching.stop();
     std::cout << "Blockmatching took: " << blockmatching.getSeconds() << std::endl;
 

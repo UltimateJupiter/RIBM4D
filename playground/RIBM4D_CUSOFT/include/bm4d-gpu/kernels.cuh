@@ -89,8 +89,8 @@ void run_fft_precomp(const uchar* __restrict d_noisy_volume,
                      const uint3 size,
                      const uint3 tshape,
                      const bm4d_gpu::Parameters params,
-                     double *d_fftCoefR,
-                     double *d_fftCoefI,
+                     double *d_sigR,
+                     double *d_sigI,
                      const cudaDeviceProp &d_prop);
 
 void run_block_matching(const uchar* __restrict d_noisy_volume, const uint3 size, const uint3 tshape,
@@ -98,14 +98,14 @@ void run_block_matching(const uchar* __restrict d_noisy_volume, const uint3 size
                         const cudaDeviceProp& d_prop);
 
 void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
-                            const double* __restrict d_fftCoefR,
-                            const double* __restrict d_fftCoefI,
+                            const double* __restrict d_sigR,
+                            const double* __restrict d_sigI,
                             const uint3 size,
                             const uint3 tshape,
                             const bm4d_gpu::Parameters params,
                             rotateRef *d_stacks_rot,
                             uint *d_nstacks_rot,
-                            int fft_patch_size,
+                            int sig_patch_size,
                             const cudaDeviceProp &d_prop);
 // Gather cubes together
 void gather_cubes(const uchar* __restrict img, const uint3 size, const uint3 tshape,
@@ -136,3 +136,7 @@ void visualize_mask(float* mask, int k);
 void load_noisy_3d(float tmp);
 
 size_t checkGpuMem();
+
+int k_Reduced_Naive_TableSize(int bw, int m);
+
+int k_Reduced_SpharmonicTableSize(int bw, int m);

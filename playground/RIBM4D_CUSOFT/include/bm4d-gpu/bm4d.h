@@ -17,6 +17,7 @@
 #include <bm4d-gpu/stopwatch.hpp>
 #include <cusoft/cusoft_kernels.cuh>
 
+
 class BM4D {
 public:
     BM4D(bm4d_gpu::Parameters p, const std::vector<uchar>& in_noisy_volume, const int& width, const int& height, const int& depth)
@@ -61,48 +62,88 @@ public:
         init_rot_coords();
 
         // Allocate space for cusoft
-        // TODO: Change after finalize
-        bw = 8;
-        degLim = 8;
-        fft_patch_size = bw * bw;
+        // TODO: Change after finalize fft shift algorithm
+        bwIn = 8;
+        bwOut = 8;
+        sig_n = bwIn * 2;
+        degLim = 7;
+        sig_patch_size = sig_n * sig_n;
         size_t free_mem = checkGpuMem();
 
-        checkCudaErrors(cudaMalloc( (void**)&d_fftCoefR, sizeof(double) * bw * bw * tsize ));
-        checkCudaErrors(cudaMalloc( (void**)&d_fftCoefI, sizeof(double) * bw * bw * tsize ));
-        std::cout << "Allocated " << (fft_patch_size * tsize * sizeof(double) * 2) << " elements for shfft" << std::endl;
+        checkCudaErrors(cudaMalloc( (void**)&d_sigR, sizeof(double) * sig_n * sig_n * tsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_sigI, sizeof(double) * sig_n * sig_n * tsize ));
+        std::cout << "Allocated " << (sig_patch_size * tsize * sizeof(double) * 2) << " elements for shfft" << std::endl;
 
-        int soft_mem_size = sizeof(double) * (24*bw + 2*bw*bw)
-                            + sizeof(double) * (16*bw*bw*bw)
-                            + 2 * sizeof(double) * (8*bw*bw*bw)
-                            + 2 * sizeof(double) * ((4*bw*bw*bw-bw)/3)
-                            + sizeof(double) * bw
-                            + sizeof(double*) * (bw + 1);
+        wsp1_bsize = 16*bwOut*bwOut*bwOut;
+        wsp2_bsize = (14*bwIn*bwIn) + (48 * bwIn);
+        sigpatCoef_bsize = bwIn * bwIn;
+        so3Coef_bsize = (4*bwOut*bwOut*bwOut-bwOut)/3;
+        so3Sig_bsize = 8 * bwOut * bwOut * bwOut;
+        SNTspace_bsize = k_Reduced_Naive_TableSize(bwIn,bwIn) + k_Reduced_SpharmonicTableSize(bwIn,bwIn); // seminaive_naive_table
+        SNT_bsize = (bwIn + 1);
+        cos_even_bsize = bwIn;
 
+        int soft_mem_size = sizeof(double) * (
+            wsp1_bsize
+            + wsp2_bsize
+            + sigpatCoef_bsize * 4
+            + so3Coef_bsize * 2
+            + so3Sig_bsize * 2
+            + SNTspace_bsize
+            + SNT_bsize
+            + cos_even_bsize
+        );
+
+        free_mem = checkGpuMem();
         batchsizeX = floor(float(free_mem) / float(soft_mem_size) * 0.9 / (theight * tdepth));
         if (batchsizeX > twidth)
             batchsizeX = twidth;
         batchsize = batchsizeX * theight * tdepth;
         printf("automatic batchsize (width) %d, batchsize %d, patch count %d\n", batchsizeX, batchsize, tsize);
-        // Allocate space to CUSOFT Workspaces
-        checkCudaErrors(cudaMalloc( (void**)&d_rdata, batchsize * sizeof(double) * (8*bw*bw*bw) ));
-        checkCudaErrors(cudaMalloc( (void**)&d_idata, batchsize * sizeof(double) * (8*bw*bw*bw) ));
-        checkCudaErrors(cudaMalloc( (void**)&d_workspace1, batchsize * sizeof(double) * (16*bw*bw*bw) ));
-        checkCudaErrors(cudaMalloc( (void**)&d_workspace2, batchsize * sizeof(double) * (24*bw + 2*bw*bw) ));
-        checkCudaErrors(cudaMalloc( (void**)&d_so3CoefR, batchsize * sizeof(double) * ((4*bw*bw*bw-bw)/3) ));
-        checkCudaErrors(cudaMalloc( (void**)&d_so3CoefI, batchsize * sizeof(double) * ((4*bw*bw*bw-bw)/3) ));
+        
+        /*
+        double *d_so3SigR, *d_so3SigI;
+        double *d_workspace1, *d_workspace2;
+        double *d_sigCoefR, *d_sigCoefI;
+        double *d_patCoefR, *d_patCoefI;
+        double *d_so3CoefR, *d_so3CoefI;
+        double *d_seminaive_naive_tablespace;
+        
+        so3SigR = (double *) malloc( sizeof(double) * (8*bwOut*bwOut*bwOut) );
+        so3SigI = (double *) malloc( sizeof(double) * (8*bwOut*bwOut*bwOut) );
+        workspace1 = (double *) malloc( sizeof(double) * (16*bwOut*bwOut*bwOut) );
+        workspace2 = (double *) malloc( sizeof(double) * ((14*bwIn*bwIn) + (48 * bwIn)));
+        sigCoefR = (double *) malloc( sizeof(double) * bwIn * bwIn ) ;
+        sigCoefI = (double *) malloc( sizeof(double) * bwIn * bwIn ) ;
+        patCoefR = (double *) malloc( sizeof(double) * bwIn * bwIn ) ;
+        patCoefI = (double *) malloc( sizeof(double) * bwIn * bwIn ) ;
+        so3CoefR = (double *) malloc( sizeof(double) * ((4*bwOut*bwOut*bwOut-bwOut)/3) ) ;
+        so3CoefI = (double *) malloc( sizeof(double) * ((4*bwOut*bwOut*bwOut-bwOut)/3) ) ;
+        */
+
+        checkCudaErrors(cudaMalloc( (void**)&d_so3SigR, batchsize * sizeof(double) * so3Sig_bsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_so3SigI, batchsize * sizeof(double) * so3Sig_bsize ));
+        
+        checkCudaErrors(cudaMalloc( (void**)&d_workspace1, batchsize * sizeof(double) * wsp1_bsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_workspace2, batchsize * sizeof(double) * wsp2_bsize ));
+        
+        checkCudaErrors(cudaMalloc( (void**)&d_sigCoefR, batchsize * sizeof(double) * sigpatCoef_bsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_sigCoefI, batchsize * sizeof(double) * sigpatCoef_bsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_patCoefR, batchsize * sizeof(double) * sigpatCoef_bsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_patCoefI, batchsize * sizeof(double) * sigpatCoef_bsize ));
+        
+        checkCudaErrors(cudaMalloc( (void**)&d_so3CoefR, batchsize * sizeof(double) * so3Coef_bsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_so3CoefI, batchsize * sizeof(double) * so3Coef_bsize ));
+        
+        checkCudaErrors(cudaMalloc( (void**)&d_seminaive_naive_tablespace, batchsize * sizeof(double) * SNTspace_bsize ));
         std::cout << "Allocated Memory to CUSOFT Workspaces" << std::endl;
         
         // Allocate space to CUSOFT lib Workspaces
-        checkCudaErrors(cudaMalloc( (void**)&d_cos_even, batchsize * sizeof(double) * bw ));
-        checkCudaErrors(cudaMalloc( (void**)&d_seminaive_naive_table, batchsize * sizeof(double*) * (bw + 1) )); // TODO: should be (double*)?
-        std::cout << "Allocated Memory to CUSOFT Workspaces (lib)" << std::endl;
+        checkCudaErrors(cudaMalloc( (void**)&d_cos_even, batchsize * sizeof(double) * cos_even_bsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_seminaive_naive_table, batchsize * sizeof(double*) * SNT_bsize )); // TODO: should be (double*)?
+        std::cout << "Pre-Allocated Memory to CUSOFT Workspaces (lib)" << std::endl;
         
         checkGpuMem();
-        wsp1_bsize = 16*bw*bw*bw;
-        wsp2_bsize = 24*bw + 2*bw*bw;
-        ridata_bsize = 8*bw*bw*bw;
-        so3Coef_bsize = (4*bw*bw*bw-bw)/3;
-        SNT_bsize = (bw + 1);
     }
 
     inline ~BM4D() {
@@ -119,17 +160,11 @@ public:
             checkCudaErrors(cudaFree(d_gathered4dstack));
             // std::cout << "Cleaned up bytes of d_gathered4dstack" << std::endl;
         }
-        if (d_fftCoefI) {
-            checkCudaErrors(cudaFree(d_fftCoefI));
+        if (d_sigI) {
+            checkCudaErrors(cudaFree(d_sigI));
         }
-        if (d_fftCoefR) {
-            checkCudaErrors(cudaFree(d_fftCoefR));
-        }
-        if (d_rdata) {
-            checkCudaErrors(cudaFree(d_rdata));
-        }
-        if (d_idata) {
-            checkCudaErrors(cudaFree(d_idata));
+        if (d_sigR) {
+            checkCudaErrors(cudaFree(d_sigR));
         }
         // TODO: Add garbage collection for other malloced arrays
         cudaDeviceReset();
@@ -192,6 +227,15 @@ public:
         checkCudaErrors(cudaMemcpy((void*)d_rel_coords, (void*)rel_coords, sizeof(float) * 3 * psize, cudaMemcpyHostToDevice));
         t_rot_coords.stop(); std::cout<<"Initialize reference coords took: " << t_rot_coords.getSeconds() <<std::endl;
     }
+    void free_cusoft_workspace()
+    {
+        checkCudaErrors(cudaFree(d_so3CoefR));
+        checkCudaErrors(cudaFree(d_so3CoefI));
+        checkCudaErrors(cudaFree(d_workspace1));
+        checkCudaErrors(cudaFree(d_workspace2));
+        checkCudaErrors(cudaFree(d_cos_even));
+        checkCudaErrors(cudaFree(d_seminaive_naive_table));
+    }
 
     void load_3d_array();
     std::vector<unsigned char> run_first_step();
@@ -224,27 +268,36 @@ public:
     float pshift; //shift from geometric center to reference point
 
     // CUSOFT configurations
-    int bw;
+    int bwIn, bwOut;
+    int sig_n;
     int degLim;
     int batchsize; // in case the memory space is not sufficient
     int batchsizeX;
 
     // Previously Computed FFT arrays (Spherical Harmonics Representation)
-    double *d_fftCoefR, *d_fftCoefI;
-    int fft_patch_size;
+    double *d_sigR, *d_sigI;
+    int sig_patch_size;
     
     // CUSOFT workspaces
-    double *d_so3CoefR, *d_so3CoefI;
-    double *d_rdata, *d_idata;
+    double *d_so3SigR, *d_so3SigI;
     double *d_workspace1, *d_workspace2;
+    double *d_sigCoefR, *d_sigCoefI;
+    double *d_patCoefR, *d_patCoefI;
+    double *d_so3CoefR, *d_so3CoefI;
+    double *d_seminaive_naive_tablespace;
+
     int wsp1_bsize, wsp2_bsize;
-    int ridata_bsize;
+    int sigpatCoef_bsize;
+    int so3Sig_bsize;
     int so3Coef_bsize;
+    int SNTspace_bsize;
 
     // CUSOFT lib workspaces
     double *d_cos_even; //cos_even = (double *) malloc(sizeof(double) * bw);
     double **d_seminaive_naive_table; // seminaive_naive_table = (double **) malloc(sizeof(double) * (bw+1));
     int SNT_bsize; // size of d_seminaive_naive_table
+    int cos_even_bsize;
+
     // Parameters for launching kernels
     dim3 block;
     dim3 grid;

@@ -22,6 +22,7 @@ float normal_pdf_sqr(float std, float x) {
     return exp(- (xh * xh) / 2.0);
 }
 
+// Get GPU RAM info
 size_t checkGpuMem()
 {
     float free_m,total_m,used_m;
@@ -34,6 +35,31 @@ size_t checkGpuMem()
     return free_t;
 }
 
+// For allocating Spharmonic Tables
+int k_Reduced_Naive_TableSize(int bw, int m)
+{
+  int i, sum;
+  sum = 0;
+  for (i=m; i<bw; i++)
+    sum += ( 2 * bw * (bw - i));
+  return sum;
+}
+
+int k_TableSize(int m, int bw)
+{
+    return (((bw/2) * ((bw/2) + 1)) - ((m/2)*((m/2)+1)) - ((bw/2) * (m % 2)));
+}
+
+int k_Reduced_SpharmonicTableSize(int bw, int m)
+{
+  int i, sum;
+  sum = 0;
+  for (i=0; i<m; i++)
+    sum += k_TableSize(i,bw);
+  return sum;
+}
+
+// visualize mask
 __global__ void vis_mask(float* mask, int k) {
     int d;
     for (int z = 0; z < k; ++z)
@@ -107,8 +133,8 @@ __global__ void k_run_fft_precomp(const uchar* __restrict img,
                                   const uint3 size,
                                   const uint3 tshape,
                                   const bm4d_gpu::Parameters params,
-                                  double *d_fftCoefR,
-                                  double *d_fftCoefI)
+                                  double *d_sigR,
+                                  double *d_sigI)
 {
 
     for (int Idz = blockDim.z * blockIdx.z + threadIdx.z; Idz < tshape.z; Idz += blockDim.z*gridDim.z)
@@ -129,8 +155,8 @@ void run_fft_precomp(const uchar* __restrict d_noisy_volume,
                      const uint3 size,
                      const uint3 tshape,
                      const bm4d_gpu::Parameters params,
-                     double *d_fftCoefR,
-                     double *d_fftCoefI,
+                     double *d_sigR,
+                     double *d_sigI,
                      const cudaDeviceProp &d_prop)
 {
     int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
@@ -146,8 +172,8 @@ void run_fft_precomp(const uchar* __restrict d_noisy_volume,
                                          size,
                                          tshape,
                                          params,
-                                         d_fftCoefR,
-                                         d_fftCoefI);
+                                         d_sigR,
+                                         d_sigI);
 
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
@@ -360,7 +386,7 @@ __device__ void add_stack_rot(rotateRef* d_stack_rot,
 }
 
 // TODO: Ziyi: dock with API for Euler Angle computation, return a float4 vector (similarity, alpha, beta, gamma)
-__device__ float4 dist_rot(const float* __restrict d_shfft_res, const uint3 ref, const uint3 cmp, const int k, const int fft_patch_size){
+__device__ float4 dist_rot(const float* __restrict d_shfft_res, const uint3 ref, const uint3 cmp, const int k, const int sig_patch_size){
     // d_shfft_res is the array of precomputed fft result
     // img_surf is the cuda array surface data (a byproduct of texture)
     float diff(0);
@@ -379,7 +405,7 @@ __global__ void k_block_matching_rot(const float* __restrict d_shfft_res,
                                      const bm4d_gpu::Parameters params,
                                      rotateRef* d_stacks_rot,
                                      uint* d_nstacks_rot,
-                                     int fft_patch_size)
+                                     int sig_patch_size)
 {
     for (int Idz = blockDim.z * blockIdx.z + threadIdx.z; Idz < tshape.z; Idz += blockDim.z*gridDim.z)
         for (int Idy = blockDim.y * blockIdx.y + threadIdx.y; Idy < tshape.y; Idy += blockDim.y*gridDim.y)
@@ -406,7 +432,7 @@ __global__ void k_block_matching_rot(const float* __restrict d_shfft_res,
                     for (int wx = wxb; wx <= wxe; wx++){
 
                         uint3 cmp = make_uint3(wx, wy, wz);
-                        float4 sim = dist_rot(d_shfft_res, ref, cmp, params.patch_size, fft_patch_size);
+                        float4 sim = dist_rot(d_shfft_res, ref, cmp, params.patch_size, sig_patch_size);
                         
                         if (sim.w < params.sim_th){
                             // printf("Dist %f\n", sim.w);
@@ -426,7 +452,7 @@ void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
                             const bm4d_gpu::Parameters params,
                             rotateRef *d_stacks_rot,
                             uint *d_nstacks_rot,
-                            int fft_patch_size,
+                            int sig_patch_size,
                             const cudaDeviceProp &d_prop)
 {
     int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
@@ -444,7 +470,7 @@ void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                              params,
                                              d_stacks_rot,
                                              d_nstacks_rot,
-                                             fft_patch_size);
+                                             sig_patch_size);
 
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
