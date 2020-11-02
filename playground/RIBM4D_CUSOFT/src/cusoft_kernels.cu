@@ -1,4 +1,5 @@
 #include <cusoft/cusoft_kernels.cuh>
+#include <cusoft/CUcospmls.cuh>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -133,13 +134,21 @@ __device__ float4 soft_corr(double *sigR, double *sigI,
     int bwIn, int bwOut, int degLim)
 {
     printf("output from device function\n");
-    for (int i = 0; i < 4; i++)
-        printf("%f\n", patR[i]);
-
-    for (int i = 0; i < 4; i++)
-        printf("%f\n", sigR[i]);
 
     int tmp, maxloc, ii, jj, kk ;
+    int n = bwIn * 2; // input shape
+
+    for (int i = 0; i < 5; i++)
+    {
+        printf("%f\n", patR[i]);
+        printf("%f\n", sigR[i]);
+    }
+
+    printf("Generating seminaive_naive tables...\n");
+    seminaive_naive_table = SemiNaive_Naive_Pml_Table(bwIn, bwIn,
+        seminaive_naive_tablespace,
+        workspace2);
+
     float4 ret;
     return ret;
 }

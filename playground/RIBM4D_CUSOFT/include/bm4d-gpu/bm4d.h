@@ -9,7 +9,7 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <cuda_runtime.h>
+// #include <cuda_runtime.h>
 #include <cuda.h>
 
 #include <bm4d-gpu/parameters.h>
