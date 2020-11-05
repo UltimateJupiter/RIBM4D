@@ -239,6 +239,7 @@ int main ( int argc,
 	  maxloc = i ;
 	}
     }
+  printf("maxloc: %f\n", maxloc);
 
   ii = floor( maxloc / (4.*bwOut*bwOut) );
   tmp = maxloc - (ii*4.*bwOut*bwOut);

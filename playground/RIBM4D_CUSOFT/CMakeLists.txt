@@ -70,6 +70,15 @@ add_library(ribm4d STATIC
         src/cusoft_lib/CUoddweights.cu
         src/cusoft_lib/CUlegendreTransforms.cu
         src/cusoft_lib/CUFST_semi_memo.cu
+        src/cusoft_lib/CUutils_so3.cu
+        src/cusoft_lib/CUso3_correlate_sym.cu
+
+        src/cusoft_lib/CUfft_grids_so3.cu
+        src/cusoft_lib/CUmakeWigner.cu
+        src/cusoft_lib/CUmakeweights.cu
+        src/cusoft_lib/CUwignerTransforms.cu
+        src/cusoft_lib/CUwignerTransforms_sym.cu
+        src/cusoft_lib/CUsoft_sym.cu
 
 
         include/cusoft/cusoft_kernels.cuh
@@ -86,7 +95,15 @@ add_library(ribm4d STATIC
         include/cusoft/CUoddweights.cuh
         include/cusoft/CUlegendreTransforms.cuh
         include/cusoft/CUFST_semi_memo.cuh
-        
+        include/cusoft/CUutils_so3.cuh
+        include/cusoft/CUso3_correlate_sym.cuh
+
+        include/cusoft/CUfft_grids_so3.cuh
+        include/cusoft/CUmakeWigner.cuh
+        include/cusoft/CUmakeweights.cuh
+        include/cusoft/CUwignerTransforms.cuh
+        include/cusoft/CUwignerTransforms_sym.cuh
+        include/cusoft/CUsoft_sym.cuh
 
         src/allreader.cpp
 )

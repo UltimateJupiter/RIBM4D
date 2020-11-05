@@ -3,6 +3,7 @@
 * v.d.tananaev [at] gmail [dot] com
 */
 #include <bm4d-gpu/kernels.cuh>
+#include <cusoft/cusoft_kernels.cuh>
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
 #include <thrust/copy.h>
@@ -14,6 +15,19 @@
 // #include "cublas_v2.h"
 
 texture<uchar, 3, cudaReadModeNormalizedFloat> noisy_volume_3d_tex;
+
+void bind_texture(cudaArray* d_noisy_volume_3d) {
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<uchar>();
+    noisy_volume_3d_tex.normalized = false;                     // access with normalized texture coordinates
+    noisy_volume_3d_tex.filterMode = cudaFilterModeLinear;      // linear interpolation
+    noisy_volume_3d_tex.addressMode[0] = cudaAddressModeWrap;   // wrap texture coordinates
+    noisy_volume_3d_tex.addressMode[1] = cudaAddressModeWrap;
+    noisy_volume_3d_tex.addressMode[2] = cudaAddressModeWrap;
+
+    // --- Bind array to 3D texture
+    checkCudaErrors(cudaBindTextureToArray(noisy_volume_3d_tex, d_noisy_volume_3d, channelDesc));
+    std::cout << "Texture Memory Binded" << std::endl;
+}
 
 float normal_pdf_sqr(float std, float x) {
     // PDF of zero-mean gaussian (normalized)
@@ -150,7 +164,7 @@ void d_volume2stack(uchar* d_noisy_volume, float* d_noisy_stacks, const uint3 si
     */
 }
 
-// visualize mask
+// =================== creating masks ========================
 __global__ void vis_mask(float* mask, int k) {
     int d;
     for (int z = 0; z < k; ++z)
@@ -166,6 +180,7 @@ void visualize_mask(float* mask, int k) {
     vis_mask <<< 1, 1 >>> (mask, k);
 }
 
+// Make rotate reference object
 __device__ rotateRef make_rotateRef_sim(uint x, uint y, uint z, float4 sim) {
     rotateRef rrf;
     rrf.x = x;
@@ -193,6 +208,7 @@ __device__ rotateRef make_rotateRef_sim(uint x, uint y, uint z, float4 sim) {
     return rrf;
 }
 
+// inference within patch after rotation
 __device__ float rotTex3D(rotateRef rrf, int px, int py, int pz, float pshift) {
     // must be called after the texture memory is binded with the noisy array.
     float fpx = (float)px - pshift;
@@ -206,19 +222,10 @@ __device__ float rotTex3D(rotateRef rrf, int px, int py, int pz, float pshift) {
     return tex3D(noisy_volume_3d_tex, rpx + 0.5f, rpy + 0.5f, rpz + 0.5f) * 255;
 }
 
-void bind_texture(cudaArray* d_noisy_volume_3d) {
-    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<uchar>();
-    noisy_volume_3d_tex.normalized = false;                     // access with normalized texture coordinates
-    noisy_volume_3d_tex.filterMode = cudaFilterModeLinear;      // linear interpolation
-    noisy_volume_3d_tex.addressMode[0] = cudaAddressModeWrap;   // wrap texture coordinates
-    noisy_volume_3d_tex.addressMode[1] = cudaAddressModeWrap;
-    noisy_volume_3d_tex.addressMode[2] = cudaAddressModeWrap;
 
-    // --- Bind array to 3D texture
-    checkCudaErrors(cudaBindTextureToArray(noisy_volume_3d_tex, d_noisy_volume_3d, channelDesc));
-    std::cout << "Texture Memory Binded" << std::endl;
-}
-
+// ==========================================================================================
+// =================================== precompute fft shift =================================
+// ==========================================================================================
 
 __global__ void k_run_fft_precomp(float* d_noisy_stacks,
                                   const uint3 size,
@@ -270,6 +277,10 @@ void run_fft_precomp(float* d_noisy_stacks,
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
 }
+
+// ==========================================================================================
+// ==================================== Debugging for stacks ================================
+// ==========================================================================================
 
 __global__ void k_debug_lookup_stacks(uint3float1 * d_stacks, int total_elements){
     int a = 345;
@@ -413,7 +424,6 @@ __global__ void k_block_matching(const uchar* __restrict img,
         }
 }
 
-// linear memory implementation
 void run_block_matching(const uchar* __restrict d_noisy_volume,
                         const uint3 size,
                         const uint3 tshape,
@@ -478,9 +488,52 @@ __device__ void add_stack_rot(rotateRef* d_stack_rot,
 }
 
 // TODO: Ziyi: dock with API for Euler Angle computation, return a float4 vector (similarity, alpha, beta, gamma)
-__device__ float4 dist_rot(const float* __restrict d_shfft_res, const uint3 ref, const uint3 cmp, const int k, const int sig_patch_size){
-    // d_shfft_res is the array of precomputed fft result
-    // img_surf is the cuda array surface data (a byproduct of texture)
+__device__ rotateRef dist_rot(const uchar* __restrict d_noisy_volume, // the input patch
+    const float* __restrict mask,
+    const uint3 sig_ref, // reference point of the signal patch (base)
+    const uint3 pat_ref, // reference point of the pattern patch (new)
+    const uint3 im_shape, // shape of image
+    const int patch_width, // width of the patch
+    double *d_sigR, double *d_sigI, // fft results od ref
+    double *d_patR, double *d_patI, // fft results of cmp
+    double *d_so3SigR, double *d_so3SigI, // workspaces for cusoft
+    double *d_workspace1, double *d_workspace2,
+    double *d_sigCoefR, double *d_sigCoefI,
+    double *d_patCoefR, double *d_patCoefI,
+    double *d_so3CoefR, double *d_so3CoefI,
+    double *d_seminaive_naive_tablespace,
+    double *d_cos_even,
+    double **d_seminaive_naive_table,
+    int bwIn, int bwOut, int degLim, // configuration of cusoft
+)
+{
+    float4 soft_rot = soft_corr(d_sigR, d_sigI,
+        d_patR, d_patI,
+        d_so3SigR, d_so3SigI,
+        d_workspace1, d_workspace2,
+        d_sigCoefR, d_sigCoefI,
+        d_patCoefR, d_patCoefI,
+        d_so3CoefR, d_so3CoefI,
+        d_seminaive_naive_tablespace,
+        d_cos_even,
+        d_seminaive_naive_table,
+        bwIn, bwOut, degLim); // rotation for cmp (pattern) to match ref (signal)
+        
+    rotateRef cmpref = make_rotateRef_sim(sig_ref.x, sig_ref.y, sig_ref.z, soft_rot);
+
+    // signal is the base patch, pattern is the new patch to be rotated.
+    int k = patch_width;
+    int pind, sig_vind;
+    float dis = 0.0;
+    float ref_val, pat_val;
+    for (int pz = 0; pz < k; ++pz)
+        for (int py = 0; py < k; ++py)
+            for (int px = 0; px < k; ++px) {
+                pind = px + py * k + pz * k * k;
+                sig_vind = (px + sig_ref.x) + (py + sig_ref.y) * im_shape.x + (pz + sig_ref.z) * im_shape.x * im_shape.y;
+                
+            }
+    
     float diff(0);
     float4 info;
     info.x = 0;

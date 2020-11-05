@@ -1,6 +1,8 @@
 #include <cusoft/cusoft_kernels.cuh>
 #include <cusoft/CUcospmls.cuh>
 #include <cusoft/CUFST_semi_memo.cuh>
+#include <cusoft/CUso3_correlate_sym.cuh>
+#include <cusoft/CUsoft_sym.cuh>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +38,7 @@ void sample_run(double *d_sigR, double *d_sigI,
     patCoefR_test = (double *) malloc( sizeof(double) * bwIn * 2 * bwIn * 2 ) ;
     patCoefI_test = (double *) malloc( sizeof(double) * bwIn * 2 * bwIn * 2 ) ;
 
-    fp = fopen("./soft_samples/randomS2sigB_bw8.dat","r");
+    fp = fopen("./soft_samples/randomS2sig_bw8.dat","r");
     for (i = 0 ; i < sig_patch_size ; i++)
     {
         fscanf(fp,"%lf", sigCoefR_test + i);
@@ -45,7 +47,7 @@ void sample_run(double *d_sigR, double *d_sigI,
     fclose( fp );
 
     /* now the pattern */
-    fp = fopen("./soft_samples/randomS2sig_bw8.dat","r");
+    fp = fopen("./soft_samples/randomS2sigB_bw8.dat","r");
     for (i = 0 ; i < sig_patch_size ; i++)
     {
         fscanf(fp,"%lf", patCoefR_test + i);
@@ -134,46 +136,64 @@ __device__ float4 soft_corr(double *sigR, double *sigI,
     double **seminaive_naive_table,
     int bwIn, int bwOut, int degLim)
 {
-    printf("output from device function\n");
     int i;
-    int tmp, maxloc, ii, jj, kk ;
+    int tmp, ii, jj, kk;
+    float maxval = 0.0;
+    int maxloc = 9;
     int n = bwIn * 2; // input shape
 
-    for (i = 0; i < 5; i++)
-    {
-        printf("%f\n", patR[i]);
-        printf("%f\n", sigR[i]);
-    }
-
-    printf("Generating seminaive_naive tables...\n");
     INPLACE_SemiNaive_Naive_Pml_Table(bwIn,
         bwIn,
         seminaive_naive_table,
         seminaive_naive_tablespace,
         workspace2);
     
-    printf("now taking spherical transform of signal\n");
     PREALLOC_FST_semi_memo(sigR, sigI,
             sigCoefR, sigCoefI,
             n, seminaive_naive_table,
             workspace2, 1, bwIn,
             cos_even);
-    if ( 1 )
-        for(i=0;i<5;i++)
-        printf("%d\t%f\t%f\n",i,sigCoefR[i],sigCoefI[i]);
     
-    printf("now taking spherical transform of pattern\n");
     PREALLOC_FST_semi_memo(patR, patI,
             patCoefR, patCoefI,
             n, seminaive_naive_table,
             workspace2, 1, bwIn,
             cos_even);
 
-    if ( 1 )
-        for(i=0;i<5;i++)
-        printf("%d\t%f\t%f\n",i,patCoefR[i],patCoefI[i]);
+    /* combine coefficients */
+    so3CombineCoef( bwIn, bwOut, degLim,
+            sigCoefR, sigCoefI,
+            patCoefR, patCoefI,
+            so3CoefR, so3CoefI ) ;
 
-    
-    float4 ret;
-    return ret;
+    /* now inverse so(3) */
+    Inverse_SO3_Naive_sym( bwOut,
+                so3CoefR, so3CoefI,
+                so3SigR, so3SigI,
+                workspace1, workspace2,
+                1 );
+
+    maxloc = 0;
+    for (i = 0; i < 8*bwOut*bwOut*bwOut; i++) {
+        if (so3SigR[i] >= maxval){
+            maxval = so3SigR[i];
+            maxloc = i ;
+        }
+    }
+
+    ii = floor(maxloc / (4.0 * bwOut * bwOut));
+    tmp = maxloc - (ii * 4.0 * bwOut * bwOut);
+    jj = floor(tmp / (2.0 * bwOut));
+    tmp = maxloc - (ii * 4 * bwOut * bwOut) - jj * (2 * bwOut);
+    kk = tmp;
+
+    // printf("ii = %d\tjj = %d\tkk = %d\n", ii, jj, kk);
+
+    float alpha = M_PI * jj / ((float) bwOut);
+    float beta = M_PI * (2 * ii + 1) / (4.0 * bwOut);
+    float gamma = M_PI * kk / ((float) bwOut);
+
+    printf("alpha = %f  beta = %f  gamma = %f\n", alpha, beta, gamma);
+
+    return make_float4(alpha, beta, gamma, 0.0);
 }
