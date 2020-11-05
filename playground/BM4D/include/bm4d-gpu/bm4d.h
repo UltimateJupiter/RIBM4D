@@ -42,6 +42,13 @@ public:
 
         // TODO: Need change
         fft_patch_size = psize;
+        
+        // Copy noisy input array to the cuda device
+        checkCudaErrors(cudaMalloc((void**)&d_noisy_volume, sizeof(uchar) * size));
+        checkCudaErrors(cudaMemcpy((void*)d_noisy_volume, (void*)noisy_volume.data(), sizeof(uchar) * size, cudaMemcpyHostToDevice));
+
+        // allocating space for putting the input in patches (for fft computation)
+        checkCudaErrors(cudaMalloc((void**)&d_noisy_stacks, sizeof(float) * tsize * psize));
 
         // uint3float1* tmp_arr = new uint3float1[params.maxN*tsize];
         checkCudaErrors(cudaMalloc((void**)&d_stacks, sizeof(uint3float1) * (params.maxN * tsize)));
@@ -60,7 +67,6 @@ public:
         std::cout << "Allocated " << (fft_patch_size * tsize) << " elements for shfft" << std::endl;
 
         init_masks();
-        init_rot_coords();
     }
 
     inline ~BM4D() {
@@ -102,10 +108,8 @@ public:
                     dy = float(y) - pshift;
                     dz = float(z) - pshift;
                     sqr_dist = dx*dx + dy*dy + dz*dz;
-                    
                     // Gaussian
                     maskGaussian[d] = normal_pdf_sqr(std, sqr_dist);
-                    
                     // Sphere
                     if (sqr_dist <= sphere_tol) maskSphere[d] = 1.0;
                     else maskSphere[d] = 0.0;
@@ -122,26 +126,8 @@ public:
         visualize_mask(d_maskSphere, params.patch_size);
     };
 
-    void init_rot_coords() {
-        Stopwatch t_rot_coords(true);
-        int k = params.patch_size;
-        rel_coords = (float*) malloc(psize * 3 * sizeof(float));
-        int d;
-        for (int z = 0; z < k; ++z)
-            for (int y = 0; y < k; ++y)
-                for (int x = 0; x < k; ++x) {
-                    d = x + y * k + z * k * k;
-                    rel_coords[3 * d] = (float) x - pshift;
-                    rel_coords[3 * d + 1] = (float) y - pshift;
-                    rel_coords[3 * d + 2] = (float) z - pshift;
-                }
-        
-        checkCudaErrors(cudaMalloc((void**)&d_rel_coords, sizeof(float) * 3 * psize));
-        checkCudaErrors(cudaMemcpy((void*)d_rel_coords, (void*)rel_coords, sizeof(float) * 3 * psize, cudaMemcpyHostToDevice));
-        t_rot_coords.stop(); std::cout<<"Initialize reference coords took: " << t_rot_coords.getSeconds() <<std::endl;
-    }
-
     void load_3d_array();
+    void copy_to_stacks();
     std::vector<unsigned char> run_first_step();
 
  private:
@@ -150,12 +136,13 @@ public:
     cudaArray *d_noisy_volume_3d;
     cudaSurfaceObject_t noisy_volume_3d_surf;
     cudaTextureObject_t noisy_volume_3d_tex;
+    uchar* d_noisy_volume;
+    float* d_noisy_stacks;
 
     // Masking and Rotation
     float* d_rel_coords;
     float* d_maskGaussian;
     float* d_maskSphere;
-    float* rel_coords;
     float* maskGaussian;
     float* maskSphere;
 

@@ -33,20 +33,55 @@ void BM4D::load_3d_array() {
     std::cout << "Binded with surface reference" << std::endl;
 }
 
-std::vector<uchar> BM4D::run_first_step() {
-    uchar* d_noisy_volume;
-    assert(size == noisy_volume.size());
-    load_3d_array();
-    checkCudaErrors(cudaMalloc((void**)&d_noisy_volume, sizeof(uchar) * size));
-    checkCudaErrors(cudaMemcpy((void*)d_noisy_volume, (void*)noisy_volume.data(), sizeof(uchar) * size, cudaMemcpyHostToDevice));
+void BM4D::init_masks() {
+    float std = pshift * 0.75; // std of gaussian 
+    float sphere_tol = (pshift + 0.25) * (pshift + 0.25); // max distance to be included in the sphere
+    int k = params.patch_size;
 
+    Stopwatch t_init_mask(true);
+    maskGaussian = (float*) malloc(psize * sizeof(float));
+    maskSphere = (float*) malloc(psize * sizeof(float));
+    // Odd size
+    float dx, dy, dz, sqr_dist;
+    int d;
+    for (int z = 0; z < k; ++z)
+        for (int y = 0; y < k; ++y)
+            for (int x = 0; x < k; ++x) {
+                d = x + y * k + z * k * k;
+                dx = float(x) - pshift;
+                dy = float(y) - pshift;
+                dz = float(z) - pshift;
+                sqr_dist = dx*dx + dy*dy + dz*dz;
+                
+                // Gaussian
+                maskGaussian[d] = normal_pdf_sqr(std, sqr_dist);
+                
+                // Sphere
+                if (sqr_dist <= sphere_tol) maskSphere[d] = 1.0;
+                else maskSphere[d] = 0.0;
+            }
+    
+    checkCudaErrors(cudaMalloc((void**)&d_maskGaussian, sizeof(float) * psize));
+    checkCudaErrors(cudaMemcpy((void*)d_maskGaussian, (void*)maskGaussian, sizeof(float) * psize, cudaMemcpyHostToDevice));
+
+    checkCudaErrors(cudaMalloc((void**)&d_maskSphere, sizeof(float) * psize));
+    checkCudaErrors(cudaMemcpy((void*)d_maskSphere, (void*)maskSphere, sizeof(float) * psize, cudaMemcpyHostToDevice));
+    
+    t_init_mask.stop(); std::cout<<"Initialize masks took: " << t_init_mask.getSeconds() <<std::endl;
+};
+
+std::vector<uchar> BM4D::run_first_step() {
+    assert(size == noisy_volume.size());
+    checkCudaErrors(cudaMemcpy((void*)d_noisy_volume, (void*)noisy_volume.data(), sizeof(uchar) * size, cudaMemcpyHostToDevice));
+    load_3d_array();
     uint3 imshape = make_uint3(width, height, depth);
     uint3 tshape = make_uint3(twidth, theight, tdepth);    // Truncated size, with some step for ref patches
+    d_volume2stack(d_noisy_volume, d_noisy_stacks, imshape, tshape, params, d_prop);
     
     // Pre-compute spehrical representation
     Stopwatch t_pre_comp_fft(true);
     std::cout << "\nComputing spherical representation of patches" << std::endl;
-    run_fft_precomp(d_noisy_volume, imshape, tshape, params, d_sigR, d_sigI, d_prop);
+    run_fft_precomp(d_noisy_stacks, imshape, tshape, params, d_sigR, d_sigI, d_prop);
     t_pre_comp_fft.stop();
     std::cout << "took: " << t_pre_comp_fft.getSeconds() << std::endl;
     

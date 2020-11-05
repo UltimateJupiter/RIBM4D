@@ -85,12 +85,12 @@ struct rotateRef {
 };
 
 
-void run_fft_precomp(const uchar* __restrict d_noisy_volume,
+void run_fft_precomp(float* d_noisy_stacks,
                      const uint3 size,
                      const uint3 tshape,
                      const bm4d_gpu::Parameters params,
-                     double *d_sigR,
-                     double *d_sigI,
+                     double* d_sigR,
+                     double* d_sigI,
                      const cudaDeviceProp &d_prop);
 
 void run_block_matching(const uchar* __restrict d_noisy_volume, const uint3 size, const uint3 tshape,
@@ -134,6 +134,8 @@ float normal_pdf_sqr(float std, float x);
 void visualize_mask(float* mask, int k);
 
 void load_noisy_3d(float tmp);
+
+void d_volume2stack(uchar* d_noisy_volume, float* d_noisy_stacks, const uint3 size, const uint3 tshape, const bm4d_gpu::Parameters params, const cudaDeviceProp& d_prop);
 
 size_t checkGpuMem();
 

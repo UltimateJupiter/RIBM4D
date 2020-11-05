@@ -34,11 +34,9 @@ void BM4D::load_3d_array() {
 }
 
 std::vector<uchar> BM4D::run_first_step() {
-    uchar* d_noisy_volume;
+    //noisy volume is the input on host device
     assert(size == noisy_volume.size());
     load_3d_array();
-    checkCudaErrors(cudaMalloc((void**)&d_noisy_volume, sizeof(uchar) * size));
-    checkCudaErrors(cudaMemcpy((void*)d_noisy_volume, (void*)noisy_volume.data(), sizeof(uchar) * size, cudaMemcpyHostToDevice));
 
     uint3 imshape = make_uint3(width, height, depth);
     uint3 tshape = make_uint3(twidth, theight, tdepth);    // Truncated size, with some step for ref patches

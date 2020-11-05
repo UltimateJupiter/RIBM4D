@@ -59,6 +59,97 @@ int k_Reduced_SpharmonicTableSize(int bw, int m)
   return sum;
 }
 
+// ==========================================================================================
+// ===================================== Copy image to stack ================================
+// ==========================================================================================
+
+// Copy the data to stacks (which are used for inplace fftshift)
+
+__global__ void k_d_volume2stack(const uchar* __restrict d_noisy_volume,
+                                 float* d_noisy_stacks,
+                                 const uint3 size,
+                                 const uint3 tshape,
+                                 const bm4d_gpu::Parameters params)
+{
+    int psize;
+    int vind, pind, pind_base;
+    int px, py, pz;
+    int vx, vy, vz;
+    int k = params.patch_size;
+    psize = k * k * k;
+    for (int Idz = blockDim.z * blockIdx.z + threadIdx.z; Idz < tshape.z; Idz += blockDim.z*gridDim.z)
+        for (int Idy = blockDim.y * blockIdx.y + threadIdx.y; Idy < tshape.y; Idy += blockDim.y*gridDim.y)
+            for (int Idx = blockDim.x * blockIdx.x + threadIdx.x; Idx < tshape.x; Idx += blockDim.x*gridDim.x)
+            {
+                pind_base = Idx + Idy * tshape.x + Idz * tshape.x * tshape.y;
+                // printf("%d\n", pind_base);
+                
+                int x = Idx * params.step_size;
+                int y = Idy * params.step_size;
+                int z = Idz * params.step_size;
+                if (x >= size.x || y >= size.y || z >= size.z || x < 0 || y < 0 || z < 0)
+                    return;
+                for (pz = 0; pz < k; ++pz)
+                    for (py = 0; py < k; ++py)
+                        for (px = 0; px < k; ++px){
+                            vx = max(0, min(x + px, size.x - 1));
+                            vy = max(0, min(y + py, size.y - 1));
+                            vz = max(0, min(z + pz, size.z - 1));
+                            vind = vx + vy * size.x + vz * size.x * size.y;
+                            pind = pind_base * psize + (px + py * k + pz * k * k);
+                            d_noisy_stacks[pind] = (float) d_noisy_volume[vind];
+                        }
+            }
+}
+
+__global__ void k_d_volume2stack_debug(const uchar* __restrict d_noisy_volume,
+    float* d_noisy_stacks,
+    const uint3 size,
+    const uint3 tshape,
+    const bm4d_gpu::Parameters params)
+{
+    int k = params.patch_size;
+    int psize = k * k * k;
+    int vind, pind;
+    int px, py, pz;
+    for (int i = 0; i < 4; i++) {
+        printf("Checking patch (%d, %d, %d)\n", i, i, i);
+        for (pz = 0; pz < k; ++pz)
+            for (py = 0; py < k; ++py)
+                for (px = 0; px < k; ++px) {
+                    vind = (px + i * params.step_size) + (py + i * params.step_size) * size.x + (pz + i * params.step_size) * size.x * size.y;
+                    pind = i * (1 + tshape.x + tshape.x * tshape.y) * psize + px + py * k + pz * k * k;
+                    printf("(%d, %d, %d): %d, %f\n", px, py, pz, d_noisy_volume[vind], d_noisy_stacks[pind]);
+                }
+    }
+}
+
+void d_volume2stack(uchar* d_noisy_volume, float* d_noisy_stacks, const uint3 size, const uint3 tshape, const bm4d_gpu::Parameters params, const cudaDeviceProp& d_prop)
+{
+    int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
+    dim3 block(threads, threads, 1);
+    int bs_x = d_prop.maxGridSize[1] < tshape.x ? d_prop.maxGridSize[1] : tshape.x;
+    int bs_y = d_prop.maxGridSize[1] < tshape.y ? d_prop.maxGridSize[1] : tshape.y;
+    dim3 grid(bs_x, bs_y, 1);
+
+    // Debug verification
+    std::cout << "Copying all patches to stack (for fftshift) " << (tshape.x*tshape.y*tshape.z) << std::endl;
+
+    k_d_volume2stack <<< grid, block >>>(d_noisy_volume,
+                                         d_noisy_stacks,
+                                         size,
+                                         tshape,
+                                         params);
+    cudaDeviceSynchronize();
+    /*
+    k_d_volume2stack_debug <<< 1, 1 >>>(d_noisy_volume,
+                                  d_noisy_stacks,
+                                  size,
+                                  tshape,
+                                  params);
+    */
+}
+
 // visualize mask
 __global__ void vis_mask(float* mask, int k) {
     int d;
@@ -129,12 +220,12 @@ void bind_texture(cudaArray* d_noisy_volume_3d) {
 }
 
 
-__global__ void k_run_fft_precomp(const uchar* __restrict img,
+__global__ void k_run_fft_precomp(float* d_noisy_stacks,
                                   const uint3 size,
                                   const uint3 tshape,
                                   const bm4d_gpu::Parameters params,
-                                  double *d_sigR,
-                                  double *d_sigI)
+                                  double* d_sigR,
+                                  double* d_sigI)
 {
 
     for (int Idz = blockDim.z * blockIdx.z + threadIdx.z; Idz < tshape.z; Idz += blockDim.z*gridDim.z)
@@ -146,17 +237,18 @@ __global__ void k_run_fft_precomp(const uchar* __restrict img,
                 int z = Idz * params.step_size;
                 if (x >= size.x || y >= size.y || z >= size.z || x < 0 || y < 0 || z < 0)
                     return;
+                float* patch = &d_noisy_stacks[Idx + Idy * tshape.x + Idz * tshape.x * tshape.y];
                 uint3 ref = make_uint3(x, y, z);
-                // TODO: compute the fft and update d_shfft_res
+                // TODO: compute the fft and update d_sigR and d_sigI
             }
 }
-
-void run_fft_precomp(const uchar* __restrict d_noisy_volume,
+// TODO: Ziyi: dock this function with your package
+void run_fft_precomp(float* d_noisy_stacks,
                      const uint3 size,
                      const uint3 tshape,
                      const bm4d_gpu::Parameters params,
-                     double *d_sigR,
-                     double *d_sigI,
+                     double* d_sigR,
+                     double* d_sigI,
                      const cudaDeviceProp &d_prop)
 {
     int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
@@ -168,7 +260,7 @@ void run_fft_precomp(const uchar* __restrict d_noisy_volume,
     // Debug verification
     std::cout << "Pre compute fft on patches " << (tshape.x*tshape.y*tshape.z) << std::endl;
 
-    k_run_fft_precomp <<< grid, block >>>(d_noisy_volume,
+    k_run_fft_precomp <<< grid, block >>>(d_noisy_stacks,
                                          size,
                                          tshape,
                                          params,
