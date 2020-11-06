@@ -83,8 +83,8 @@ std::vector<uchar> BM4D::run_first_step() {
                             imshape,
                             tshape,
                             params,
-                            d_stacks_rot,
-                            d_nstacks_rot,
+                            d_stacks,
+                            d_nstacks,
                             batchsizeZ,
                             d_maskGaussian,
                             d_maskSphere,
@@ -105,16 +105,27 @@ std::vector<uchar> BM4D::run_first_step() {
                             d_prop);
     blockmatching_rot.stop();
     std::cout << "Blockmatching rot took: " << blockmatching_rot.getSeconds() << std::endl;
-    return noisy_volume;
-    
+    free_cusoft_workspace();
+
+    // // Gather cubes together
+    // uint gather_stacks_sum;
+    // Stopwatch gatheringcubes(true);
+    // gather_cubes(d_noisy_volume, imshape, tshape, params, d_stacks, d_nstacks, d_gathered4dstack, gather_stacks_sum, d_prop);
+    // // std::cout << "Acquied size " << gather_stacks_sum << std::endl;
+    // gatheringcubes.stop();
+    // std::cout << "Gathering cubes took: " << gatheringcubes.getSeconds() << std::endl;
+    // // debug_kernel(d_gathered4dstack);
+
     // Gather cubes together
     uint gather_stacks_sum;
     Stopwatch gatheringcubes(true);
-    gather_cubes(d_noisy_volume, imshape, tshape, params, d_stacks, d_nstacks, d_gathered4dstack, gather_stacks_sum, d_prop);
+    gather_cubes_rot(d_noisy_volume_3d, imshape, tshape, params, d_stacks, d_nstacks, d_gathered4dstack, gather_stacks_sum, d_prop);
     // std::cout << "Acquied size " << gather_stacks_sum << std::endl;
     gatheringcubes.stop();
     std::cout << "Gathering cubes took: " << gatheringcubes.getSeconds() << std::endl;
     // debug_kernel(d_gathered4dstack);
+    return noisy_volume;
+    
     checkCudaErrors(cudaFree(d_noisy_volume));
 
     // Perform 3D DCT
@@ -140,15 +151,15 @@ std::vector<uchar> BM4D::run_first_step() {
 
 
     // Aggregate
-    float* final_image = new float[width * height * depth];
-    memset(final_image, 0.0, sizeof(float) * width * height * depth);
-    Stopwatch aggregation_t(true);
-    run_aggregation(final_image, imshape, tshape, d_gathered4dstack, d_stacks, d_nstacks, d_group_weights, params, gather_stacks_sum, d_prop);
-    aggregation_t.stop();
-    std::cout << "Aggregation took: " << aggregation_t.getSeconds() << std::endl;
-    for (int i = 0; i < size; i++) {
-        noisy_volume[i] = static_cast<uchar>(final_image[i]);
-    }
-    delete[] final_image;
+    // float* final_image = new float[width * height * depth];
+    // memset(final_image, 0.0, sizeof(float) * width * height * depth);
+    // Stopwatch aggregation_t(true);
+    // run_aggregation(final_image, imshape, tshape, d_gathered4dstack, d_stacks, d_nstacks, d_group_weights, params, gather_stacks_sum, d_prop);
+    // aggregation_t.stop();
+    // std::cout << "Aggregation took: " << aggregation_t.getSeconds() << std::endl;
+    // for (int i = 0; i < size; i++) {
+    //     noisy_volume[i] = static_cast<uchar>(final_image[i]);
+    // }
+    // delete[] final_image;
     return noisy_volume;
 }

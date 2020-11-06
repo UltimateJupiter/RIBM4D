@@ -607,11 +607,8 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     uint3 ref_coord = make_uint3(vx_ref, vy_ref, vz_ref);
 
                     float* ref_patch = &d_ref_patchs[mem_offset * patch_bsize];
-                    fill_patch(d_noisy_volume, ref_patch, size, ref_coord, patchsize); // fill the reference patch
-                    apply_mask(ref_patch, mask_Gaussian, patchsize);
                     double* sigR = &d_sigR[mem_offset * sigpatSig_bsize];
                     double* sigI = &d_sigI[mem_offset * sigpatSig_bsize];
-                    fft_shift_3d(ref_patch, sigR, sigI, patchsize, bwIn); // compute fftshift for the reference patch
                     
                     // pre-allocated workspace for cmp patch and fftshift of it
                     float* cmp_patch = &d_cmp_patchs[mem_offset * patch_bsize];
@@ -632,7 +629,10 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     double* seminaive_naive_tablespace = &d_seminaive_naive_tablespace[mem_offset * SNTspace_bsize];
                     double* cos_even = &d_cos_even[mem_offset * cos_even_bsize];
                     double** seminaive_naive_table = &d_seminaive_naive_table[mem_offset * SNT_bsize];
-
+                    
+                    fill_patch(d_noisy_volume, ref_patch, size, ref_coord, patchsize); // fill the reference patch
+                    apply_mask(ref_patch, mask_Gaussian, patchsize);
+                    fft_shift_3d(ref_patch, sigR, sigI, patchsize, bwIn); // compute fftshift for the reference patch
                     // range of searching
                     int wxb = fmaxf(0, vx_ref - params_window_size); // window x begin
                     int wyb = fmaxf(0, vy_ref - params_window_size); // window y begin
@@ -678,7 +678,6 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                                 params_maxN);
                                 }
                             }
-                    return;
                 }
     }
     
@@ -917,15 +916,15 @@ struct is_not_empty_rot
     }
 };
 
-void gather_cubes(cudaArray* d_noisy_volume_3d,
-                  const uint3 size,
-                  const uint3 tshape,
-                  const bm4d_gpu::Parameters params,
-                  rotateRef* &d_stacks_rot,
-                  uint* d_nstacks_rot,
-                  float* &d_gathered4dstack_rot,
-                  uint &gather_stacks_sum_rot,
-                  const cudaDeviceProp &d_prop)
+void gather_cubes_rot(cudaArray* d_noisy_volume_3d,
+                      const uint3 size,
+                      const uint3 tshape,
+                      const bm4d_gpu::Parameters params,
+                      rotateRef* &d_stacks_rot,
+                      uint* d_nstacks_rot,
+                      float* &d_gathered4dstack_rot,
+                      uint &gather_stacks_sum_rot,
+                      const cudaDeviceProp &d_prop)
 {
     // Convert all the numbers in d_nstacks to the lowest power of two
     bind_texture(d_noisy_volume_3d);

@@ -120,6 +120,17 @@ void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
 void gather_cubes(const uchar* __restrict img, const uint3 size, const uint3 tshape,
                   const bm4d_gpu::Parameters params, uint3float1*& d_stacks, uint* d_nstacks,
                   float*& d_gathered4dstack, uint& gather_stacks_sum, const cudaDeviceProp& d_prop);
+
+void gather_cubes_rot(cudaArray* d_noisy_volume_3d,
+                      const uint3 size,
+                      const uint3 tshape,
+                      const bm4d_gpu::Parameters params,
+                      rotateRef* &d_stacks_rot,
+                      uint* d_nstacks_rot,
+                      float* &d_gathered4dstack_rot,
+                      uint &gather_stacks_sum_rot,
+                      const cudaDeviceProp &d_prop);
+
 // Perform 3D DCT
 void run_dct3d(float* d_gathered4dstack, uint gather_stacks_sum, int patch_size,
                const cudaDeviceProp& d_prop);

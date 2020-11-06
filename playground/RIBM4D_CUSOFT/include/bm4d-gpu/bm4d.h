@@ -46,13 +46,10 @@ public:
         checkCudaErrors(cudaMalloc((void**)&d_noisy_volume, sizeof(uchar) * size));
 
         // uint3float1* tmp_arr = new uint3float1[params.maxN*tsize];
-        checkCudaErrors(cudaMalloc((void**)&d_stacks, sizeof(uint3float1) * (params.maxN * tsize)));
-        checkCudaErrors(cudaMalloc((void**)&d_stacks_rot, sizeof(rotateRef) * (params.maxN * tsize)));
+        checkCudaErrors(cudaMalloc((void**)&d_stacks, sizeof(rotateRef) * (params.maxN * tsize)));
 
         checkCudaErrors(cudaMalloc((void**)&d_nstacks, sizeof(uint) * (tsize)));
-        checkCudaErrors(cudaMalloc((void**)&d_nstacks_rot, sizeof(uint) * (tsize)));
         checkCudaErrors(cudaMemset(d_nstacks, 0, sizeof(uint) * tsize));
-        checkCudaErrors(cudaMemset(d_nstacks_rot, 0, sizeof(uint) * tsize));
         std::cout << "Allocated " << (tsize) << " elements for d_nstacks" << std::endl;
         size_t free_mem = checkGpuMem();
 
@@ -142,12 +139,6 @@ public:
             checkCudaErrors(cudaFree(d_gathered4dstack));
             // std::cout << "Cleaned up bytes of d_gathered4dstack" << std::endl;
         }
-        if (d_sigI) {
-            checkCudaErrors(cudaFree(d_sigI));
-        }
-        if (d_sigR) {
-            checkCudaErrors(cudaFree(d_sigR));
-        }
         // TODO: Add garbage collection for other malloced arrays
         cudaDeviceReset();
     };
@@ -156,7 +147,7 @@ public:
 
     void free_cusoft_workspace()
     {
-        std::cout << "free memory by block matching and cusoft" << std::endl;
+        std::cout << "freeing memory by block matching and cusoft" << std::endl;
         checkCudaErrors(cudaFree(d_ref_patchs));
         checkCudaErrors(cudaFree(d_cmp_patchs));
 
@@ -212,13 +203,8 @@ public:
 
     // Device variables
     float* d_gathered4dstack;
-    float* d_gathered4dstack_rot;
-
-    uint3float1* d_stacks;
-    rotateRef* d_stacks_rot;
-    
+    rotateRef* d_stacks;
     uint* d_nstacks;
-    uint* d_nstacks_rot;
     
     float* d_group_weights;
     int width, height, depth, size;
