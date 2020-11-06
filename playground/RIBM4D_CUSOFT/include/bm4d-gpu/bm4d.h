@@ -40,11 +40,10 @@ public:
         twidth = std::floor((width - 1) / params.step_size + 1);
         theight = std::floor((height - 1) / params.step_size + 1);
         tdepth = std::floor((depth - 1) / params.step_size + 1);
+
         tsize = twidth * theight * tdepth;
 
         checkCudaErrors(cudaMalloc((void**)&d_noisy_volume, sizeof(uchar) * size));
-        checkCudaErrors(cudaMalloc((void**)&d_noisy_stacks, sizeof(float) * tsize * psize));
-        std::cout << "Allocated " << (sizeof(uchar) * size + sizeof(float) * tsize * psize) << " elements for storing copies of the data (stacks and original image)" << std::endl;
 
         // uint3float1* tmp_arr = new uint3float1[params.maxN*tsize];
         checkCudaErrors(cudaMalloc((void**)&d_stacks, sizeof(uint3float1) * (params.maxN * tsize)));
@@ -55,6 +54,7 @@ public:
         checkCudaErrors(cudaMemset(d_nstacks, 0, sizeof(uint) * tsize));
         checkCudaErrors(cudaMemset(d_nstacks_rot, 0, sizeof(uint) * tsize));
         std::cout << "Allocated " << (tsize) << " elements for d_nstacks" << std::endl;
+        size_t free_mem = checkGpuMem();
 
         init_masks();
 
@@ -62,15 +62,10 @@ public:
         // TODO: Change after finalize fft shift algorithm
         bwIn = 8;
         bwOut = 8;
-        sig_n = bwIn * 2;
         degLim = 7;
-        sig_patch_size = sig_n * sig_n;
-        size_t free_mem = checkGpuMem();
-
-        checkCudaErrors(cudaMalloc( (void**)&d_sigR, sizeof(double) * sig_n * sig_n * tsize ));
-        checkCudaErrors(cudaMalloc( (void**)&d_sigI, sizeof(double) * sig_n * sig_n * tsize ));
-        std::cout << "Allocated " << (sig_patch_size * tsize * sizeof(double) * 2) << " elements for shfft" << std::endl;
-
+        
+        sig_n = bwIn * 2;
+        sigpatSig_bsize = sig_n * sig_n;
         wsp1_bsize = 16*bwOut*bwOut*bwOut;
         wsp2_bsize = (14*bwIn*bwIn) + (48 * bwIn);
         sigpatCoef_bsize = bwIn * bwIn;
@@ -83,21 +78,31 @@ public:
         int soft_mem_size = sizeof(double) * (
             wsp1_bsize
             + wsp2_bsize
+            + sigpatSig_bsize * 4
             + sigpatCoef_bsize * 4
             + so3Coef_bsize * 2
             + so3Sig_bsize * 2
             + SNTspace_bsize
             + SNT_bsize
             + cos_even_bsize
+            + psize * 2
         );
 
         free_mem = checkGpuMem();
-        batchsizeX = floor(float(free_mem) / float(soft_mem_size) * 0.9 / (theight * tdepth));
-        if (batchsizeX > twidth)
-            batchsizeX = twidth;
-        batchsize = batchsizeX * theight * tdepth;
-        printf("automatic batchsize (width) %d, batchsize %d, patch count %d\n", batchsizeX, batchsize, tsize);
+        batchsizeZ = floor(float(free_mem) / float(soft_mem_size) * 0.9 / (theight * twidth));
+        if (batchsizeZ > tdepth)
+            batchsizeZ = tdepth;
+        batchsize = batchsizeZ * theight * twidth;
+        printf("automatic batchsize (depth) %d, batchsize %d, patch count %d\n", batchsizeZ, batchsize, tsize);
         
+        checkCudaErrors(cudaMalloc( (void**)&d_ref_patchs, batchsize * sizeof(float) * psize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_cmp_patchs, batchsize * sizeof(float) * psize ));
+
+        checkCudaErrors(cudaMalloc( (void**)&d_sigR, sizeof(double) * sigpatSig_bsize * batchsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_sigI, sizeof(double) * sigpatSig_bsize * batchsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_patR, sizeof(double) * sigpatSig_bsize * batchsize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_patI, sizeof(double) * sigpatSig_bsize * batchsize ));
+
         checkCudaErrors(cudaMalloc( (void**)&d_so3SigR, batchsize * sizeof(double) * so3Sig_bsize ));
         checkCudaErrors(cudaMalloc( (void**)&d_so3SigI, batchsize * sizeof(double) * so3Sig_bsize ));
         
@@ -117,7 +122,7 @@ public:
         
         // Allocate space to CUSOFT lib Workspaces
         checkCudaErrors(cudaMalloc( (void**)&d_cos_even, batchsize * sizeof(double) * cos_even_bsize ));
-        checkCudaErrors(cudaMalloc( (void**)&d_seminaive_naive_table, batchsize * sizeof(double*) * SNT_bsize )); // TODO: should be (double*)?
+        checkCudaErrors(cudaMalloc( (void**)&d_seminaive_naive_table, batchsize * sizeof(double) * SNT_bsize )); // TODO: should be (double*)?
         std::cout << "Pre-Allocated Memory to CUSOFT Workspaces (lib)" << std::endl;
         
         checkGpuMem();
@@ -151,12 +156,34 @@ public:
 
     void free_cusoft_workspace()
     {
-        checkCudaErrors(cudaFree(d_so3CoefR));
-        checkCudaErrors(cudaFree(d_so3CoefI));
+        std::cout << "free memory by block matching and cusoft" << std::endl;
+        checkCudaErrors(cudaFree(d_ref_patchs));
+        checkCudaErrors(cudaFree(d_cmp_patchs));
+
+        checkCudaErrors(cudaFree(d_sigR));
+        checkCudaErrors(cudaFree(d_sigI));
+        checkCudaErrors(cudaFree(d_patR));
+        checkCudaErrors(cudaFree(d_patI));
+
+        checkCudaErrors(cudaFree(d_so3SigR));
+        checkCudaErrors(cudaFree(d_so3SigI));
+
         checkCudaErrors(cudaFree(d_workspace1));
         checkCudaErrors(cudaFree(d_workspace2));
+
+        checkCudaErrors(cudaFree(d_sigCoefR));
+        checkCudaErrors(cudaFree(d_sigCoefI));
+        checkCudaErrors(cudaFree(d_patCoefR));
+        checkCudaErrors(cudaFree(d_patCoefI));
+
+        checkCudaErrors(cudaFree(d_so3CoefR));
+        checkCudaErrors(cudaFree(d_so3CoefI));
+
+        checkCudaErrors(cudaFree(d_seminaive_naive_tablespace));
+
         checkCudaErrors(cudaFree(d_cos_even));
         checkCudaErrors(cudaFree(d_seminaive_naive_table));
+        checkGpuMem();
     }
 
     void init_masks();
@@ -170,7 +197,8 @@ public:
 
     uchar* d_noisy_volume;
     cudaArray *d_noisy_volume_3d;
-    float* d_noisy_stacks;
+    float* d_ref_patchs;
+    float* d_cmp_patchs;
 
     cudaSurfaceObject_t noisy_volume_3d_surf;
     cudaTextureObject_t noisy_volume_3d_tex;
@@ -184,10 +212,14 @@ public:
 
     // Device variables
     float* d_gathered4dstack;
+    float* d_gathered4dstack_rot;
+
     uint3float1* d_stacks;
     rotateRef* d_stacks_rot;
+    
     uint* d_nstacks;
     uint* d_nstacks_rot;
+    
     float* d_group_weights;
     int width, height, depth, size;
     int twidth, theight, tdepth, tsize;
@@ -199,11 +231,13 @@ public:
     int sig_n;
     int degLim;
     int batchsize; // in case the memory space is not sufficient
-    int batchsizeX;
+    int batchsizeZ;
 
-    // Previously Computed FFT arrays (Spherical Harmonics Representation)
+    // buffer for real time computation of fftshift
     double *d_sigR, *d_sigI;
-    int sig_patch_size;
+    double *d_patR, *d_patI;
+
+    int sigpatSig_bsize;
     
     // CUSOFT workspaces
     double *d_so3SigR, *d_so3SigI;

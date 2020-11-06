@@ -47,7 +47,7 @@ void sample_run(double *d_sigR, double *d_sigI,
     fclose( fp );
 
     /* now the pattern */
-    fp = fopen("./soft_samples/randomS2sigB_bw8.dat","r");
+    fp = fopen("./soft_samples/randomS2sigA_bw8.dat","r");
     for (i = 0 ; i < sig_patch_size ; i++)
     {
         fscanf(fp,"%lf", patCoefR_test + i);
@@ -61,8 +61,8 @@ void sample_run(double *d_sigR, double *d_sigI,
     for ( i = 0; i < 4; i ++ )
         printf("%f\n", sigCoefR_test[i]);
 
-    cudaMemcpy( &d_sigR[1 * sig_patch_size], sigCoefR_test, sizeof(double) * sig_patch_size, cudaMemcpyHostToDevice ) ;
-    cudaMemcpy( &d_sigI[1 * sig_patch_size], sigCoefI_test, sizeof(double) * sig_patch_size, cudaMemcpyHostToDevice ) ;
+    cudaMemcpy( &d_sigR[1 * sig_patch_size], patCoefR_test, sizeof(double) * sig_patch_size, cudaMemcpyHostToDevice ) ;
+    cudaMemcpy( &d_sigI[1 * sig_patch_size], patCoefI_test, sizeof(double) * sig_patch_size, cudaMemcpyHostToDevice ) ;
     cudaMemcpy( &d_sigR[0 * sig_patch_size], patCoefR_test, sizeof(double) * sig_patch_size, cudaMemcpyHostToDevice ) ;
     cudaMemcpy( &d_sigI[0 * sig_patch_size], patCoefI_test, sizeof(double) * sig_patch_size, cudaMemcpyHostToDevice ) ;
 
@@ -193,7 +193,8 @@ __device__ float4 soft_corr(double *sigR, double *sigI,
     float beta = M_PI * (2 * ii + 1) / (4.0 * bwOut);
     float gamma = M_PI * kk / ((float) bwOut);
 
-    printf("alpha = %f  beta = %f  gamma = %f\n", alpha, beta, gamma);
+    // printf("alpha = %f  beta = %f  gamma = %f\n", alpha, beta, gamma);
+    
 
     return make_float4(alpha, beta, gamma, 0.0);
 }

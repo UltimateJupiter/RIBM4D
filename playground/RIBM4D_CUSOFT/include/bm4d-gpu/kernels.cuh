@@ -84,28 +84,37 @@ struct rotateRef {
     __host__ __device__ rotateRef(uint x, uint y, uint z, float val, float v1x, float v1y, float v1z, float v2x, float v2y, float v2z, float v3x, float v3y, float v3z) : x(x), y(y), z(z), val(val), v1x(v1x), v1y(v1y), v1z(v1z), v2x(v2x), v2y(v2y), v2z(v2z), v3x(v3x), v3y(v3y), v3z(v3z){}
 };
 
+void bind_texture(cudaArray* d_noisy_volume_3d);
 
-void run_fft_precomp(float* d_noisy_stacks,
-                     const uint3 size,
-                     const uint3 tshape,
-                     const bm4d_gpu::Parameters params,
-                     double* d_sigR,
-                     double* d_sigI,
-                     const cudaDeviceProp &d_prop);
+void check_texture_sync(const uchar* d_noisy_volume, cudaArray* d_noisy_volume_3d, uint3 imshape, int patchsize);
 
 void run_block_matching(const uchar* __restrict d_noisy_volume, const uint3 size, const uint3 tshape,
                         const bm4d_gpu::Parameters params, uint3float1* d_stacks, uint* d_nstacks,
                         const cudaDeviceProp& d_prop);
 
 void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
-                            const double* __restrict d_sigR,
-                            const double* __restrict d_sigI,
                             const uint3 size,
                             const uint3 tshape,
                             const bm4d_gpu::Parameters params,
-                            rotateRef *d_stacks_rot,
-                            uint *d_nstacks_rot,
-                            int sig_patch_size,
+                            rotateRef* d_stacks_rot,
+                            uint* d_nstacks_rot,
+                            int batchsizeZ,
+                            float *mask_Gaussian,
+                            float *mask_Sphere,
+                            float *d_ref_patchs,
+                            float *d_cmp_patchs,
+                            double *d_sigR, double *d_sigI,
+                            double *d_patR, double *d_patI,
+                            double *d_so3SigR, double *d_so3SigI,
+                            double *d_workspace1, double *d_workspace2,
+                            double *d_sigCoefR, double *d_sigCoefI,
+                            double *d_patCoefR, double *d_patCoefI,
+                            double *d_so3CoefR, double *d_so3CoefI,
+                            double *d_seminaive_naive_tablespace,
+                            double *d_cos_even,
+                            double **d_seminaive_naive_table,
+                            int bwIn, int bwOut, int degLim,
+                            int SNTspace_bsize,
                             const cudaDeviceProp &d_prop);
 // Gather cubes together
 void gather_cubes(const uchar* __restrict img, const uint3 size, const uint3 tshape,

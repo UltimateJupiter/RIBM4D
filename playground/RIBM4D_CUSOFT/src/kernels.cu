@@ -27,6 +27,7 @@ void bind_texture(cudaArray* d_noisy_volume_3d) {
     // --- Bind array to 3D texture
     checkCudaErrors(cudaBindTextureToArray(noisy_volume_3d_tex, d_noisy_volume_3d, channelDesc));
     std::cout << "Texture Memory Binded" << std::endl;
+    cudaDeviceSynchronize();
 }
 
 float normal_pdf_sqr(float std, float x) {
@@ -78,7 +79,7 @@ int k_Reduced_SpharmonicTableSize(int bw, int m)
 // ==========================================================================================
 
 // Copy the data to stacks (which are used for inplace fftshift)
-
+// TODO: remove this if not needed in the end
 __global__ void k_d_volume2stack(const uchar* __restrict d_noisy_volume,
                                  float* d_noisy_stacks,
                                  const uint3 size,
@@ -155,13 +156,6 @@ void d_volume2stack(uchar* d_noisy_volume, float* d_noisy_stacks, const uint3 si
                                          tshape,
                                          params);
     cudaDeviceSynchronize();
-    /*
-    k_d_volume2stack_debug <<< 1, 1 >>>(d_noisy_volume,
-                                  d_noisy_stacks,
-                                  size,
-                                  tshape,
-                                  params);
-    */
 }
 
 // =================== creating masks ========================
@@ -224,58 +218,13 @@ __device__ float rotTex3D(rotateRef rrf, int px, int py, int pz, float pshift) {
 
 
 // ==========================================================================================
-// =================================== precompute fft shift =================================
+// =================================== compute fft shift ====================================
 // ==========================================================================================
 
-__global__ void k_run_fft_precomp(float* d_noisy_stacks,
-                                  const uint3 size,
-                                  const uint3 tshape,
-                                  const bm4d_gpu::Parameters params,
-                                  double* d_sigR,
-                                  double* d_sigI)
+// Update the bufferR and bufferI with the result computed based on patch (of size k*k*k)
+__device__ void fft_shift_3d(float* patch, double* bufR, double* bufI, int k, int bw)
 {
-
-    for (int Idz = blockDim.z * blockIdx.z + threadIdx.z; Idz < tshape.z; Idz += blockDim.z*gridDim.z)
-        for (int Idy = blockDim.y * blockIdx.y + threadIdx.y; Idy < tshape.y; Idy += blockDim.y*gridDim.y)
-            for (int Idx = blockDim.x * blockIdx.x + threadIdx.x; Idx < tshape.x; Idx += blockDim.x*gridDim.x)
-            {
-                int x = Idx * params.step_size;
-                int y = Idy * params.step_size;
-                int z = Idz * params.step_size;
-                if (x >= size.x || y >= size.y || z >= size.z || x < 0 || y < 0 || z < 0)
-                    return;
-                float* patch = &d_noisy_stacks[Idx + Idy * tshape.x + Idz * tshape.x * tshape.y];
-                uint3 ref = make_uint3(x, y, z);
-                // TODO: compute the fft and update d_sigR and d_sigI
-            }
-}
-// TODO: Ziyi: dock this function with your package
-void run_fft_precomp(float* d_noisy_stacks,
-                     const uint3 size,
-                     const uint3 tshape,
-                     const bm4d_gpu::Parameters params,
-                     double* d_sigR,
-                     double* d_sigI,
-                     const cudaDeviceProp &d_prop)
-{
-    int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
-    dim3 block(threads, threads, 1);
-    int bs_x = d_prop.maxGridSize[1] < tshape.x ? d_prop.maxGridSize[1] : tshape.x;
-    int bs_y = d_prop.maxGridSize[1] < tshape.y ? d_prop.maxGridSize[1] : tshape.y;
-    dim3 grid(bs_x, bs_y, 1);
-
-    // Debug verification
-    std::cout << "Pre compute fft on patches " << (tshape.x*tshape.y*tshape.z) << std::endl;
-
-    k_run_fft_precomp <<< grid, block >>>(d_noisy_stacks,
-                                         size,
-                                         tshape,
-                                         params,
-                                         d_sigR,
-                                         d_sigI);
-
-    cudaDeviceSynchronize();
-    checkCudaErrors(cudaGetLastError());
+    return;
 }
 
 // ==========================================================================================
@@ -326,6 +275,32 @@ __device__ __inline__ uint flp2(uint x)
     x = x | (x >> 16);
     return x - (x >> 1);
 }
+
+
+
+__global__ void k_check_texture_sync(const uchar* d_noisy_volume, uint3 imshape, int patchsize)
+{
+    float diff = 0.0;
+    float pshift = ((float) patchsize - 1.0) / 2.0;
+    for (int x = 0; x < imshape.x; x++)
+        for (int y = 0; y < imshape.y; y++)
+            for (int z = 0; z < imshape.z; z++) {
+                float4 trivial_angle = make_float4(0., 0., 0., 0.);
+                rotateRef rrf = make_rotateRef_sim(x, y, z, trivial_angle);
+                int vind = x + y * imshape.x + z * imshape.x * imshape.y;
+                diff += abs((float) d_noisy_volume[vind] - rotTex3D(rrf, 0, 0, 0, pshift));
+            }
+    printf("average difference in synchronization: %f\n", diff / (imshape.x * imshape.y * imshape.z));
+}
+
+void check_texture_sync(const uchar* d_noisy_volume, cudaArray* d_noisy_volume_3d, uint3 imshape, int patchsize)
+{
+    bind_texture(d_noisy_volume_3d);
+    k_check_texture_sync <<< 1, 1 >>> (d_noisy_volume, imshape, patchsize);
+    cudaDeviceSynchronize();
+    checkCudaErrors(cudaGetLastError());
+}
+
 
 // ==========================================================================================
 // ======================================= Standard Matching ================================
@@ -456,6 +431,30 @@ void run_block_matching(const uchar* __restrict d_noisy_volume,
 // ======================================= Rotation Matching ================================
 // ==========================================================================================
 
+__device__ void fill_patch(const uchar* __restrict d_noisy_volume, float* patch, const uint3 size, const uint3 coord, int k)
+{
+    memset(patch, 0, k * k * k * sizeof(float));
+    int pind, vind;
+    int px, py, pz;
+    int vx, vy, vz;
+    for (pz = 0; pz < k; ++pz)
+        for (py = 0; py < k; ++py)
+            for (px = 0; px < k; ++px){
+                vx = max(0, min(coord.x + px, size.x - 1));
+                vy = max(0, min(coord.y + py, size.y - 1));
+                vz = max(0, min(coord.z + pz, size.z - 1));
+                vind = vx + vy * size.x + vz * size.x * size.y;
+                pind = px + py * k + pz * k * k;
+                patch[pind] = (float) d_noisy_volume[vind];
+            }
+}
+__device__ void apply_mask(float* patch, float* mask, int k)
+{
+    for (int i = 0; i < k * k * k; i++) {
+        patch[i] *= mask[i];
+    }
+}
+
 __device__ void add_stack_rot(rotateRef* d_stack_rot,
                               uint* d_nstack_rot, // keep track of current stack size
                               const rotateRef newval,
@@ -487,142 +486,277 @@ __device__ void add_stack_rot(rotateRef* d_stack_rot,
     }
 }
 
-// TODO: Ziyi: dock with API for Euler Angle computation, return a float4 vector (similarity, alpha, beta, gamma)
 __device__ rotateRef dist_rot(const uchar* __restrict d_noisy_volume, // the input patch
     const float* __restrict mask,
     const uint3 sig_ref, // reference point of the signal patch (base)
     const uint3 pat_ref, // reference point of the pattern patch (new)
-    const uint3 im_shape, // shape of image
+    const uint3 size, // shape of image
     const int patch_width, // width of the patch
-    double *d_sigR, double *d_sigI, // fft results od ref
-    double *d_patR, double *d_patI, // fft results of cmp
-    double *d_so3SigR, double *d_so3SigI, // workspaces for cusoft
-    double *d_workspace1, double *d_workspace2,
-    double *d_sigCoefR, double *d_sigCoefI,
-    double *d_patCoefR, double *d_patCoefI,
-    double *d_so3CoefR, double *d_so3CoefI,
-    double *d_seminaive_naive_tablespace,
-    double *d_cos_even,
-    double **d_seminaive_naive_table,
-    int bwIn, int bwOut, int degLim, // configuration of cusoft
-)
+    double *sigR, double *sigI, // fft results od ref
+    double *patR, double *patI, // fft results of cmp
+    double *so3SigR, double *so3SigI, // workspaces for cusoft
+    double *workspace1, double *workspace2,
+    double *sigCoefR, double *sigCoefI,
+    double *patCoefR, double *patCoefI,
+    double *so3CoefR, double *so3CoefI,
+    double *seminaive_naive_tablespace,
+    double *cos_even,
+    double **seminaive_naive_table,
+    int bwIn, int bwOut, int degLim) // configuration of cusoft
 {
-    float4 soft_rot = soft_corr(d_sigR, d_sigI,
-        d_patR, d_patI,
-        d_so3SigR, d_so3SigI,
-        d_workspace1, d_workspace2,
-        d_sigCoefR, d_sigCoefI,
-        d_patCoefR, d_patCoefI,
-        d_so3CoefR, d_so3CoefI,
-        d_seminaive_naive_tablespace,
-        d_cos_even,
-        d_seminaive_naive_table,
+    float4 soft_rot = soft_corr(sigR, sigI,
+        patR, patI,
+        so3SigR, so3SigI,
+        workspace1, workspace2,
+        sigCoefR, sigCoefI,
+        patCoefR, patCoefI,
+        so3CoefR, so3CoefI,
+        seminaive_naive_tablespace,
+        cos_even,
+        seminaive_naive_table,
         bwIn, bwOut, degLim); // rotation for cmp (pattern) to match ref (signal)
         
     rotateRef cmpref = make_rotateRef_sim(sig_ref.x, sig_ref.y, sig_ref.z, soft_rot);
 
     // signal is the base patch, pattern is the new patch to be rotated.
     int k = patch_width;
+    float pshift = (float(k) - 1) / 2.0;
+
     int pind, sig_vind;
-    float dis = 0.0;
-    float ref_val, pat_val;
+    float diff = 0.0;
     for (int pz = 0; pz < k; ++pz)
         for (int py = 0; py < k; ++py)
             for (int px = 0; px < k; ++px) {
                 pind = px + py * k + pz * k * k;
-                sig_vind = (px + sig_ref.x) + (py + sig_ref.y) * im_shape.x + (pz + sig_ref.z) * im_shape.x * im_shape.y;
-                
+                sig_vind = (px + sig_ref.x) + (py + sig_ref.y) * size.x + (pz + sig_ref.z) * size.x * size.y;
+                float diff_pix = (float) d_noisy_volume[sig_vind] - rotTex3D(cmpref, px, py, pz, pshift);
+                diff_pix *= mask[pind];
+                diff += diff_pix * diff_pix;
             }
-    
-    float diff(0);
-    float4 info;
-    info.x = 0;
-    info.y = 0;
-    info.z = 0;
-    info.w = diff;
-    // TODO: Complete this thing
-    return info;
+    cmpref.val = diff / (k*k*k);
+    return cmpref;
 }
 
-__global__ void k_block_matching_rot(const float* __restrict d_shfft_res,
+__global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                      const uint3 size,
                                      const uint3 tshape,
-                                     const bm4d_gpu::Parameters params,
+                                     int params_patch_size,
+                                     int params_window_size,
+                                     int params_step_size,
+                                     int params_maxN,
+                                     float params_sim_th,
                                      rotateRef* d_stacks_rot,
                                      uint* d_nstacks_rot,
-                                     int sig_patch_size)
-{
-    for (int Idz = blockDim.z * blockIdx.z + threadIdx.z; Idz < tshape.z; Idz += blockDim.z*gridDim.z)
-        for (int Idy = blockDim.y * blockIdx.y + threadIdx.y; Idy < tshape.y; Idy += blockDim.y*gridDim.y)
-            for (int Idx = blockDim.x * blockIdx.x + threadIdx.x; Idx < tshape.x; Idx += blockDim.x*gridDim.x)
-            {
+                                     int batchsizeZ,
+                                     float *mask_Gaussian,
+                                     float *mask_Sphere,
+                                     float *d_ref_patchs,
+                                     float *d_cmp_patchs,
+                                     double *d_sigR, double *d_sigI,
+                                     double *d_patR, double *d_patI,
+                                     double *d_so3SigR, double *d_so3SigI,
+                                     double *d_workspace1, double *d_workspace2,
+                                     double *d_sigCoefR, double *d_sigCoefI,
+                                     double *d_patCoefR, double *d_patCoefI,
+                                     double *d_so3CoefR, double *d_so3CoefI,
+                                     double *d_seminaive_naive_tablespace,
+                                     double *d_cos_even,
+                                     double **d_seminaive_naive_table,
+                                     int bwIn,
+                                     int SNTspace_bsize)
+{   
+    int bwOut = bwIn;
+    int degLim = bwIn - 1;
+    
+    int sig_n = bwIn * 2;
+    int sigpatSig_bsize = sig_n * sig_n;
+    int wsp1_bsize = 16*bwOut*bwOut*bwOut;
+    int wsp2_bsize = (14*bwIn*bwIn) + (48 * bwIn);
+    int sigpatCoef_bsize = bwIn * bwIn;
+    int so3Coef_bsize = (4*bwOut*bwOut*bwOut-bwOut)/3;
+    int so3Sig_bsize = 8 * bwOut * bwOut * bwOut;
+    int SNT_bsize = (bwIn + 1);
+    int cos_even_bsize = bwIn;
 
-            int x = Idx * params.step_size;
-            int y = Idy * params.step_size;
-            int z = Idz * params.step_size;
-            if (x >= size.x || y >= size.y || z >= size.z || x < 0 || y < 0 || z < 0)
-                return;
+    int tx_ref, ty_ref, tz_ref, vx_ref, vy_ref, vz_ref;
+    int vx_cmp, vy_cmp, vz_cmp;
+    int tz_batchind;
 
-            int wxb = fmaxf(0, x - params.window_size); // window x begin
-            int wyb = fmaxf(0, y - params.window_size); // window y begin
-            int wzb = fmaxf(0, z - params.window_size); // window z begin
-            int wxe = fminf(size.x - 1, x + params.window_size); // window x end
-            int wye = fminf(size.y - 1, y + params.window_size); // window y end
-            int wze = fminf(size.z - 1, z + params.window_size); // window z end
+    int patchsize = params_patch_size;
+    int patch_bsize = patchsize * patchsize * patchsize; // size of the patch
 
-            uint3 ref = make_uint3(x, y, z);
+    for (tz_batchind = 0; tz_batchind < tshape.z; tz_batchind += batchsizeZ) {
+        // printf("Processing %d layers among %d total\n", tz_batchind + batchsizeZ, tshape.z);
+        for (tz_ref = tz_batchind + blockDim.z * blockIdx.z + threadIdx.z; tz_ref < min(tshape.z, batchsizeZ + tz_batchind); tz_ref += blockDim.z*gridDim.z)
+            for (ty_ref = blockDim.y * blockIdx.y + threadIdx.y; ty_ref < tshape.y; ty_ref += blockDim.y*gridDim.y)
+                for (tx_ref = blockDim.x * blockIdx.x + threadIdx.x; tx_ref < tshape.x; tx_ref += blockDim.x*gridDim.x) {
+                    
+                    vx_ref = tx_ref * params_step_size;
+                    vy_ref = ty_ref * params_step_size;
+                    vz_ref = tz_ref * params_step_size;
 
-            for (int wz = wzb; wz <= wze; wz++)
-                for (int wy = wyb; wy <= wye; wy++)
-                    for (int wx = wxb; wx <= wxe; wx++){
+                    
+                    if (vx_ref >= size.x || vy_ref >= size.y || vz_ref >= size.z || vx_ref < 0 || vy_ref < 0 || vz_ref < 0)
+                        return;
+                    
+                    int tz_offset = tz_ref - tz_batchind;
+                    int mem_offset = tz_offset * tshape.x * tshape.y + ty_ref * tshape.x + tx_ref; // memory location in the batch buffer
+                    // if (mem_offset > 10) return;
+                    printf("%d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
+                    // construct the reference patch
+                    uint3 ref_coord = make_uint3(vx_ref, vy_ref, vz_ref);
 
-                        uint3 cmp = make_uint3(wx, wy, wz);
-                        float4 sim = dist_rot(d_shfft_res, ref, cmp, params.patch_size, sig_patch_size);
-                        
-                        if (sim.w < params.sim_th){
-                            // printf("Dist %f\n", sim.w);
-                            add_stack_rot(&d_stacks_rot[(Idx + (Idy + Idz* tshape.y)*tshape.x)*params.maxN],
-                                          &d_nstacks_rot[Idx + (Idy + Idz* tshape.y)*tshape.x],
-                                          make_rotateRef_sim(wx, wy, wz, sim),
-                                          params.maxN);
-                        }
-                    }
-        }
+                    float* ref_patch = &d_ref_patchs[mem_offset * patch_bsize];
+                    fill_patch(d_noisy_volume, ref_patch, size, ref_coord, patchsize); // fill the reference patch
+                    apply_mask(ref_patch, mask_Gaussian, patchsize);
+                    double* sigR = &d_sigR[mem_offset * sigpatSig_bsize];
+                    double* sigI = &d_sigI[mem_offset * sigpatSig_bsize];
+                    fft_shift_3d(ref_patch, sigR, sigI, patchsize, bwIn); // compute fftshift for the reference patch
+                    
+                    // pre-allocated workspace for cmp patch and fftshift of it
+                    float* cmp_patch = &d_cmp_patchs[mem_offset * patch_bsize];
+                    double* patR = &d_patR[mem_offset * sigpatSig_bsize];
+                    double* patI = &d_patI[mem_offset * sigpatSig_bsize];
+                    
+                    // pre-allocated workspace for cusoft
+                    double* so3SigR = &d_so3SigR[mem_offset * so3Sig_bsize];
+                    double* so3SigI = &d_so3SigI[mem_offset * so3Sig_bsize];
+                    double* workspace1 = &d_workspace1[mem_offset * wsp1_bsize];
+                    double* workspace2 = &d_workspace2[mem_offset * wsp2_bsize];
+                    double* sigCoefR = &d_sigCoefR[mem_offset * sigpatCoef_bsize];
+                    double* sigCoefI = &d_sigCoefI[mem_offset * sigpatCoef_bsize];
+                    double* patCoefR = &d_patCoefR[mem_offset * sigpatCoef_bsize];
+                    double* patCoefI = &d_patCoefI[mem_offset * sigpatCoef_bsize];
+                    double* so3CoefR = &d_so3CoefR[mem_offset * so3Coef_bsize];
+                    double* so3CoefI = &d_so3CoefI[mem_offset * so3Coef_bsize];
+                    double* seminaive_naive_tablespace = &d_seminaive_naive_tablespace[mem_offset * SNTspace_bsize];
+                    double* cos_even = &d_cos_even[mem_offset * cos_even_bsize];
+                    double** seminaive_naive_table = &d_seminaive_naive_table[mem_offset * SNT_bsize];
+
+                    // range of searching
+                    int wxb = fmaxf(0, vx_ref - params_window_size); // window x begin
+                    int wyb = fmaxf(0, vy_ref - params_window_size); // window y begin
+                    int wzb = fmaxf(0, vz_ref - params_window_size); // window z begin
+                    int wxe = fminf(size.x - params_patch_size, vx_ref + params_window_size); // window x end
+                    int wye = fminf(size.y - params_patch_size, vy_ref + params_window_size); // window y end
+                    int wze = fminf(size.z - params_patch_size, vz_ref + params_window_size); // window z end
+
+
+                    for (vz_cmp = wzb; vz_cmp <= wze; vz_cmp++)
+                        for (vy_cmp = wyb; vy_cmp <= wye; vy_cmp++)
+                            for (vx_cmp = wxb; vx_cmp <= wxe; vx_cmp++){
+
+                                // printf("%d, %d, %d\n", vx_cmp, vy_cmp, vz_cmp);
+                                uint3 cmp_coord = make_uint3(vx_cmp, vy_cmp, vz_cmp);
+                                fill_patch(d_noisy_volume, cmp_patch, size, cmp_coord, patchsize); // fill the reference patch
+                                apply_mask(cmp_patch, mask_Gaussian, patchsize);
+                                fft_shift_3d(cmp_patch, patR, patI, patchsize, bwIn); // compute fftshift for the reference patch
+
+                                rotateRef rrf = dist_rot(d_noisy_volume, 
+                                                      mask_Sphere,
+                                                      ref_coord, 
+                                                      cmp_coord,
+                                                      size,
+                                                      params_patch_size,
+                                                      sigR, sigI,
+                                                      patR, patI,
+                                                      so3SigR, so3SigI,
+                                                      workspace1, workspace2,
+                                                      sigCoefR, sigCoefI,
+                                                      patCoefR, patCoefI,
+                                                      so3CoefR, so3CoefI,
+                                                      seminaive_naive_tablespace,
+                                                      cos_even,
+                                                      seminaive_naive_table,
+                                                      bwIn, bwOut, degLim);
+                                
+                                if (rrf.val < params_sim_th){
+                                    // printf("Dist %f\n", rrf.val);
+                                    add_stack_rot(&d_stacks_rot[(tx_ref + (ty_ref + tz_ref* tshape.y)*tshape.x)*params_maxN],
+                                                &d_nstacks_rot[tx_ref + (ty_ref + tz_ref* tshape.y)*tshape.x],
+                                                rrf,
+                                                params_maxN);
+                                }
+                            }
+                    return;
+                }
+    }
+    
 }
 
 void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
-                            const float* __restrict d_shfft_res,
                             const uint3 size,
                             const uint3 tshape,
                             const bm4d_gpu::Parameters params,
-                            rotateRef *d_stacks_rot,
-                            uint *d_nstacks_rot,
-                            int sig_patch_size,
+                            rotateRef* d_stacks_rot,
+                            uint* d_nstacks_rot,
+                            int batchsizeZ,
+                            float *mask_Gaussian,
+                            float *mask_Sphere,
+                            float *d_ref_patchs,
+                            float *d_cmp_patchs,
+                            double *d_sigR, double *d_sigI,
+                            double *d_patR, double *d_patI,
+                            double *d_so3SigR, double *d_so3SigI,
+                            double *d_workspace1, double *d_workspace2,
+                            double *d_sigCoefR, double *d_sigCoefI,
+                            double *d_patCoefR, double *d_patCoefI,
+                            double *d_so3CoefR, double *d_so3CoefI,
+                            double *d_seminaive_naive_tablespace,
+                            double *d_cos_even,
+                            double **d_seminaive_naive_table,
+                            int bwIn, int bwOut, int degLim,
+                            int SNTspace_bsize,
                             const cudaDeviceProp &d_prop)
 {
     int threads = std::floor(sqrt(d_prop.maxThreadsPerBlock));
     dim3 block(threads, threads, 1);
     int bs_x = d_prop.maxGridSize[1] < tshape.x ? d_prop.maxGridSize[1] : tshape.x;
     int bs_y = d_prop.maxGridSize[1] < tshape.y ? d_prop.maxGridSize[1] : tshape.y;
+    // int bs_z = d_prop.maxGridSize[2] < batchsizeZ ? d_prop.maxGridSize[2] : batchsizeZ;
     dim3 grid(bs_x, bs_y, 1);
 
     // Debug verification
     std::cout << "Total number of reference patches " << (tshape.x*tshape.y*tshape.z) << std::endl;
 
-    k_block_matching_rot <<< grid, block >>>(d_shfft_res,
-                                             size,
-                                             tshape,
-                                             params,
-                                             d_stacks_rot,
-                                             d_nstacks_rot,
-                                             sig_patch_size);
+    // TODO: optimize the kernel call to enhance speed.
+    dim3 blocks_test(tshape.x, tshape.y, batchsizeZ);
+    dim3 grid_test(1, 1, 1);
+    // k_block_matching_rot <<< grid, block >>>(d_noisy_volume,
+    k_block_matching_rot <<< blocks_test, grid_test >>>(d_noisy_volume,
+                                            size,
+                                            tshape,
+                                            params.patch_size,
+                                            params.window_size,
+                                            params.step_size,
+                                            params.maxN,
+                                            params.sim_th,
+                                            d_stacks_rot,
+                                            d_nstacks_rot,
+                                            batchsizeZ,
+                                            mask_Gaussian,
+                                            mask_Sphere,
+                                            d_ref_patchs,
+                                            d_cmp_patchs,
+                                            d_sigR, d_sigI,
+                                            d_patR, d_patI,
+                                            d_so3SigR, d_so3SigI,
+                                            d_workspace1, d_workspace2,
+                                            d_sigCoefR, d_sigCoefI,
+                                            d_patCoefR, d_patCoefI,
+                                            d_so3CoefR, d_so3CoefI,
+                                            d_seminaive_naive_tablespace,
+                                            d_cos_even,
+                                            d_seminaive_naive_table,
+                                            bwIn,
+                                            SNTspace_bsize);
 
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
 }
 
 // ==========================================================================================
-// ========================================== Filtering =====================================
+// ======================================= Gather Cubes =====================================
 // ==========================================================================================
 
 __global__ void k_nstack_to_pow(uint3float1* d_stacks, uint* d_nstacks, const int elements, const uint maxN){
@@ -670,7 +804,6 @@ __global__ void k_gather_cubes(const uchar* __restrict img,
 
                     d_gathered4dstack[stack_idx] = img[img_idx];
                 }
-
     }
 }
 
@@ -705,7 +838,6 @@ void gather_cubes(const uchar* __restrict img,
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
 
-
     // Make a compaction
     uint3float1 * d_stacks_compacted;
     checkCudaErrors(cudaMalloc((void**)&d_stacks_compacted, sizeof(uint3float1)*gather_stacks_sum));
@@ -726,6 +858,108 @@ void gather_cubes(const uchar* __restrict img,
 
     bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(gather_stacks_sum / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(gather_stacks_sum / threads);
     k_gather_cubes <<<  bs_x, threads >>> (img, size, params, d_stacks, gather_stacks_sum, d_gathered4dstack);
+    cudaDeviceSynchronize();
+    checkCudaErrors(cudaGetLastError());
+}
+
+
+// ==========================================================================================
+// =================================== Rot Gather Cubes =====================================
+// ==========================================================================================
+
+__global__ void k_nstack_rot_to_pow(rotateRef* d_stacks_rot, uint* d_nstacks_rot, const int elements, const uint maxN){
+    for (int i = blockIdx.x*blockDim.x + threadIdx.x; i < elements; i += blockDim.x*gridDim.x){
+        if (i >= elements) return;
+
+        uint inGroupId = i % maxN;
+        uint groupId = i/maxN;
+
+        uint n = d_nstacks_rot[groupId];
+        uint tmp = flp2(n);
+        uint diff = d_nstacks_rot[groupId] - tmp;
+
+        __syncthreads();
+        d_nstacks_rot[groupId] = tmp;
+
+        if (inGroupId < diff || inGroupId >= n)
+            d_stacks_rot[i].val = -1;
+    }
+}
+
+__global__ void k_gather_cubes_rot(cudaArray* d_noisy_volume_3d,
+                               const uint3 size,
+                               const bm4d_gpu::Parameters params,
+                               const rotateRef* __restrict d_stacks_rot,
+                               const uint array_size,
+                               float* d_gathered4dstack_rot)
+{
+    int cube_size = params.patch_size*params.patch_size*params.patch_size;
+    int pshift = ((float) params.patch_size - 1.0) / 2.0;
+    for (int i = blockIdx.x*blockDim.x + threadIdx.x; i < array_size; i += blockDim.x*gridDim.x){
+        if (i >= array_size) return;
+        rotateRef rrf = d_stacks_rot[i];
+
+        for (int z = 0; z < params.patch_size; ++z)
+            for (int y = 0; y < params.patch_size; ++y)
+                for (int x = 0; x < params.patch_size; ++x){
+                    int stack_idx = i*cube_size + (x)+(y + z*params.patch_size)*params.patch_size;
+                    d_gathered4dstack_rot[stack_idx] = rotTex3D(rrf, x, y, z, pshift);
+                }
+    }
+}
+
+struct is_not_empty_rot
+{
+    __host__ __device__
+    bool operator()(const rotateRef x)
+    {
+        return (x.val != -1);
+    }
+};
+
+void gather_cubes(cudaArray* d_noisy_volume_3d,
+                  const uint3 size,
+                  const uint3 tshape,
+                  const bm4d_gpu::Parameters params,
+                  rotateRef* &d_stacks_rot,
+                  uint* d_nstacks_rot,
+                  float* &d_gathered4dstack_rot,
+                  uint &gather_stacks_sum_rot,
+                  const cudaDeviceProp &d_prop)
+{
+    // Convert all the numbers in d_nstacks to the lowest power of two
+    bind_texture(d_noisy_volume_3d);
+    uint array_size = (tshape.x*tshape.y*tshape.z);
+    int threads = d_prop.maxThreadsPerBlock;
+    int bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(params.maxN*array_size / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(params.maxN*array_size / threads);
+    k_nstack_rot_to_pow <<< bs_x, threads >>>(d_stacks_rot, d_nstacks_rot, params.maxN*array_size, params.maxN);
+    checkCudaErrors(cudaGetLastError());
+    thrust::device_ptr<uint> dt_nstacks_rot = thrust::device_pointer_cast(d_nstacks_rot);
+    gather_stacks_sum_rot = thrust::reduce(dt_nstacks_rot, dt_nstacks_rot + array_size);
+    std::cout << "Sum of patches: "<< gather_stacks_sum_rot << std::endl;
+    cudaDeviceSynchronize();
+    checkCudaErrors(cudaGetLastError());
+
+    // Make a compaction
+    rotateRef * d_stacks_compacted_rot;
+    checkCudaErrors(cudaMalloc((void**)&d_stacks_compacted_rot, sizeof(rotateRef)*gather_stacks_sum_rot));
+    thrust::device_ptr<rotateRef> dt_stacks_rot = thrust::device_pointer_cast(d_stacks_rot);
+    thrust::device_ptr<rotateRef> dt_stacks_compacted_rot = thrust::device_pointer_cast(d_stacks_compacted_rot);
+    thrust::copy_if(dt_stacks_rot, dt_stacks_rot + params.maxN *tshape.x*tshape.y*tshape.z, dt_stacks_compacted_rot, is_not_empty_rot());
+    d_stacks_compacted_rot = thrust::raw_pointer_cast(dt_stacks_compacted_rot);
+    rotateRef* tmp = d_stacks_rot;
+    d_stacks_rot = d_stacks_compacted_rot;
+    checkCudaErrors(cudaFree(tmp));
+    //k_debug_lookup_stacks <<< 1, 1 >>>(d_stacks, tshape.x*tshape.y*tshape.z);
+    cudaDeviceSynchronize();
+    checkCudaErrors(cudaGetLastError());
+
+    // Allocate memory for gathered stacks uchar
+    checkCudaErrors(cudaMalloc((void**)&d_gathered4dstack_rot, sizeof(float)*(gather_stacks_sum_rot*params.patch_size*params.patch_size*params.patch_size)));
+    //std::cout << "Allocated " << sizeof(float)*(gather_stacks_sum*params.patch_size*params.patch_size*params.patch_size) << " bytes for gathered4dstack" << std::endl;
+
+    bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(gather_stacks_sum_rot / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(gather_stacks_sum_rot / threads);
+    k_gather_cubes_rot <<<  bs_x, threads >>> (d_noisy_volume_3d, size, params, d_stacks_rot, gather_stacks_sum_rot, d_gathered4dstack_rot);
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
 }

@@ -9,7 +9,6 @@
 // texture<uchar, 3, cudaReadModeNormalizedFloat> noisy_volume_3d_tex;
 
 void BM4D::load_3d_array() {
-    Stopwatch copyingtodevice(true);
     const cudaExtent volumeSize = make_cudaExtent(width, height, depth);
     cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<uchar>();
     checkCudaErrors(cudaMalloc3DArray(&d_noisy_volume_3d, &channelDesc, volumeSize));
@@ -22,15 +21,7 @@ void BM4D::load_3d_array() {
     copyParams.extent   = volumeSize;
     copyParams.kind     = cudaMemcpyHostToDevice;
     checkCudaErrors(cudaMemcpy3D(&copyParams));
-    copyingtodevice.stop(); std::cout << "Copying to device (3d tex) took:" << copyingtodevice.getSeconds() << std::endl;
-    
-    // Create the surface object
-    struct cudaResourceDesc surfRes;
-    memset(&surfRes, 0, sizeof(surfRes));
-    surfRes.resType = cudaResourceTypeArray;
-    surfRes.res.array.array = d_noisy_volume_3d;
-    checkCudaErrors(cudaCreateSurfaceObject(&noisy_volume_3d_surf, &surfRes));
-    std::cout << "Binded with surface reference" << std::endl;
+    std::cout << "Copying to device (3d tex)" << std::endl;
 }
 
 void BM4D::init_masks() {
@@ -72,49 +63,50 @@ void BM4D::init_masks() {
 
 std::vector<uchar> BM4D::run_first_step() {
     assert(size == noisy_volume.size());
-    checkCudaErrors(cudaMemcpy((void*)d_noisy_volume, (void*)noisy_volume.data(), sizeof(uchar) * size, cudaMemcpyHostToDevice));
-    load_3d_array();
     uint3 imshape = make_uint3(width, height, depth);
     uint3 tshape = make_uint3(twidth, theight, tdepth);    // Truncated size, with some step for ref patches
-    d_volume2stack(d_noisy_volume, d_noisy_stacks, imshape, tshape, params, d_prop);
-    
-    // Pre-compute spehrical representation
-    Stopwatch t_pre_comp_fft(true);
-    std::cout << "\nComputing spherical representation of patches" << std::endl;
-    run_fft_precomp(d_noisy_stacks, imshape, tshape, params, d_sigR, d_sigI, d_prop);
-    t_pre_comp_fft.stop();
-    std::cout << "took: " << t_pre_comp_fft.getSeconds() << std::endl;
-    
-    sample_run(d_sigR, d_sigI,
-        d_so3SigR, d_so3SigI,
-        d_workspace1, d_workspace2,
-        d_sigCoefR, d_sigCoefI,
-        d_patCoefR, d_patCoefI,
-        d_so3CoefR, d_so3CoefI,
-        d_seminaive_naive_tablespace,
-        d_cos_even,
-        d_seminaive_naive_table,
-        bwIn, bwOut, degLim,
-        sig_patch_size,
-        wsp1_bsize,
-        wsp2_bsize,
-        sigpatCoef_bsize,
-        so3Coef_bsize,
-        so3Sig_bsize,
-        SNTspace_bsize,
-        SNT_bsize,
-        cos_even_bsize);
-    
-    
-    return noisy_volume;
-    // Do block matching
-    Stopwatch blockmatching(true);
-    std::cout << "\nStart blockmatching" << std::endl;
-    run_block_matching(d_noisy_volume, imshape, tshape, params, d_stacks, d_nstacks, d_prop);
-    run_block_matching_rot(d_noisy_volume, d_sigR, d_sigI, imshape, tshape, params, d_stacks_rot, d_nstacks_rot, sig_patch_size, d_prop);
-    blockmatching.stop();
-    std::cout << "Blockmatching took: " << blockmatching.getSeconds() << std::endl;
 
+    checkCudaErrors(cudaMemcpy((void*)d_noisy_volume, (void*)noisy_volume.data(), sizeof(uchar) * size, cudaMemcpyHostToDevice));
+    load_3d_array();
+    check_texture_sync(d_noisy_volume, d_noisy_volume_3d, imshape, params.patch_size);
+    
+    // Do block matching
+    // Stopwatch blockmatching(true);
+    // std::cout << "\nStart blockmatching" << std::endl;
+    // run_block_matching(d_noisy_volume, imshape, tshape, params, d_stacks, d_nstacks, d_prop);
+    // blockmatching.stop();
+    // std::cout << "Blockmatching took: " << blockmatching.getSeconds() << std::endl;
+    bind_texture(d_noisy_volume_3d);
+    Stopwatch blockmatching_rot(true);
+    std::cout << "\nStart blockmatching (rot)" << std::endl;
+    run_block_matching_rot(d_noisy_volume,
+                            imshape,
+                            tshape,
+                            params,
+                            d_stacks_rot,
+                            d_nstacks_rot,
+                            batchsizeZ,
+                            d_maskGaussian,
+                            d_maskSphere,
+                            d_ref_patchs,
+                            d_cmp_patchs,
+                            d_sigR, d_sigI,
+                            d_patR, d_patI,
+                            d_so3SigR, d_so3SigI,
+                            d_workspace1, d_workspace2,
+                            d_sigCoefR, d_sigCoefI,
+                            d_patCoefR, d_patCoefI,
+                            d_so3CoefR, d_so3CoefI,
+                            d_seminaive_naive_tablespace,
+                            d_cos_even,
+                            d_seminaive_naive_table,
+                            bwIn, bwOut, degLim,
+                            SNTspace_bsize,
+                            d_prop);
+    blockmatching_rot.stop();
+    std::cout << "Blockmatching rot took: " << blockmatching_rot.getSeconds() << std::endl;
+    return noisy_volume;
+    
     // Gather cubes together
     uint gather_stacks_sum;
     Stopwatch gatheringcubes(true);
