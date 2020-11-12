@@ -18,6 +18,7 @@ set(CXX
 set(CU  src/kernels.cu
         src/cusoft_kernels.cu
         src/bm4d.cu
+        src/fft_bm4d_tools.cu
         src/cusoft_lib/CUcospmls.cu
         src/cusoft_lib/CUs2_primitive.cu
         src/cusoft_lib/CUnewFCT.cu
@@ -33,6 +34,7 @@ set(H
         include/bm4d-gpu/stopwatch.hpp
         include/bm4d-gpu/utils.h
         include/bm4d-gpu/kernels.cuh
+        include/bm4d-gpu/fft_bm4d_tools.cuh
         include/cusoft/cusoft_kernels.cuh
         include/cusoft/CUcospmls.cuh
         include/cusoft/CUs2_primitive.cuh
@@ -46,6 +48,7 @@ add_library(ribm4d STATIC
         src/kernels.cu
         src/cusoft_kernels.cu
         src/bm4d.cu
+        src/fft_bm4d_tools.cu
 
         include/bm4d-gpu/allreader.h
         include/bm4d-gpu/bm4d.h
@@ -55,6 +58,7 @@ add_library(ribm4d STATIC
         include/bm4d-gpu/stopwatch.hpp
         include/bm4d-gpu/utils.h
         include/bm4d-gpu/kernels.cuh
+        include/bm4d-gpu/fft_bm4d_tools.cuh
 
 
         src/cusoft_lib/CUcospmls.cu

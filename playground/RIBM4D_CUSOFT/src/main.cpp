@@ -46,7 +46,7 @@ int main(int argc, char* argv[]) {
     std::vector<unsigned char> denoised_image = filter.run_first_step();
     bm4d_timing.stop();
 
-    return EXIT_SUCCESS;
+    //return EXIT_SUCCESS;
 
     std::cout << "BM4D total time: " << bm4d_timing.getSeconds() << std::endl;
 

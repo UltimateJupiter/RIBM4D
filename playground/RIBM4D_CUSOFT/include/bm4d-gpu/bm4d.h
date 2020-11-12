@@ -32,6 +32,7 @@ public:
         noisy_volume = in_noisy_volume;
         size = width * height * depth;
         psize = p.patch_size * p.patch_size * p.patch_size;
+        buf_size = p.patch_size * p.patch_size;
         pshift = ((float) p.patch_size - 1.0) / 2.0;
         int device;
         checkCudaErrors(cudaGetDevice(&device));
@@ -82,7 +83,8 @@ public:
             + SNTspace_bsize
             + SNT_bsize
             + cos_even_bsize
-            + psize * 2
+            + psize * 3
+            + buf_size * 2
         );
 
         free_mem = checkGpuMem();
@@ -94,6 +96,9 @@ public:
         
         checkCudaErrors(cudaMalloc( (void**)&d_ref_patchs, batchsize * sizeof(float) * psize ));
         checkCudaErrors(cudaMalloc( (void**)&d_cmp_patchs, batchsize * sizeof(float) * psize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_patchs_im, batchsize * sizeof(float) * psize ));
+        checkCudaErrors(cudaMalloc( (void**)&d_buf_re, batchsize * sizeof(float) * buf_size ));
+        checkCudaErrors(cudaMalloc( (void**)&d_buf_im, batchsize * sizeof(float) * buf_size ));
 
         checkCudaErrors(cudaMalloc( (void**)&d_sigR, sizeof(double) * sigpatSig_bsize * batchsize ));
         checkCudaErrors(cudaMalloc( (void**)&d_sigI, sizeof(double) * sigpatSig_bsize * batchsize ));
@@ -150,6 +155,9 @@ public:
         std::cout << "freeing memory by block matching and cusoft" << std::endl;
         checkCudaErrors(cudaFree(d_ref_patchs));
         checkCudaErrors(cudaFree(d_cmp_patchs));
+        checkCudaErrors(cudaFree(d_patchs_im));
+        checkCudaErrors(cudaFree(d_buf_re));
+        checkCudaErrors(cudaFree(d_buf_im));
 
         checkCudaErrors(cudaFree(d_sigR));
         checkCudaErrors(cudaFree(d_sigI));
@@ -190,6 +198,11 @@ public:
     cudaArray *d_noisy_volume_3d;
     float* d_ref_patchs;
     float* d_cmp_patchs;
+    //Imaginary part of patch used in fft
+    float* d_patchs_im;
+    //Buffer used by fft (stockam algorithm), size N^2
+    float* d_buf_re;
+    float* d_buf_im;
 
     cudaSurfaceObject_t noisy_volume_3d_surf;
     cudaTextureObject_t noisy_volume_3d_tex;
@@ -210,6 +223,7 @@ public:
     int width, height, depth, size;
     int twidth, theight, tdepth, tsize;
     int psize;
+    int buf_size;
     float pshift; //shift from geometric center to reference point
 
     // CUSOFT configurations

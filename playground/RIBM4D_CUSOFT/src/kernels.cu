@@ -3,6 +3,7 @@
 * v.d.tananaev [at] gmail [dot] com
 */
 #include <bm4d-gpu/kernels.cuh>
+#include <bm4d-gpu/fft_bm4d_tools.cuh>
 #include <cusoft/cusoft_kernels.cuh>
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
@@ -221,9 +222,62 @@ __device__ float rotTex3D(rotateRef rrf, int px, int py, int pz, float pshift) {
 // =================================== compute fft shift ====================================
 // ==========================================================================================
 
+__device__ void DEBUG_show_spherical_buf(double* buf, int bw) {
+    printf("start:\n");
+    for (int i = 0; i < bw * 2; i++) {
+        printf("[");
+        for (int j = 0; j < bw * 2; j++) {
+            printf("%lf, ", buf[2*bw*i + j]);
+        }
+        printf("]\n");
+    }
+    printf("\n");
+}
+
+__device__ void DEBUG_show_fft_res(float* data) {
+    printf("fft: ");
+    for (int i = 0; i < 64; i++) {
+        printf("%f, ", data[i]);
+    }
+    printf("\n");
+}
+
+__device__ void DEBUG_show_buf(float* buf) {
+    printf("buf: ");
+    for (int i = 0; i < 16; i++) {
+        printf("%f, ", buf[i]);
+    }
+    printf("\n");
+}
+
 // Update the bufferR and bufferI with the result computed based on patch (of size k*k*k)
-__device__ void fft_shift_3d(float* patch, double* bufR, double* bufI, int k, int bw)
+__device__ void fft_shift_3d(float* patch, float* patch_im, float* patch_buf_re, float* patch_buf_im, double* bufR, double* bufI, int k, int bw)
 {
+    /*
+    //printf("one fft-----------------------------------\n");
+    struct fft_bm4d_tools fft_tools(k, bw);
+    //DEBUG_show_fft_res(patch);
+    //DEBUG_show_fft_res(patch_im);
+
+    fft_tools.ifftshift_3d_in(patch, patch_im);
+    //DEBUG_show_fft_res(patch);
+    //DEBUG_show_fft_res(patch_im);
+    fft_tools.fft_3d(patch, patch_im, patch_buf_re, patch_buf_im);
+    //DEBUG_show_fft_res(patch);
+    //DEBUG_show_fft_res(patch_im);
+    fft_tools.fftshift_3d_in(patch, patch_im);
+    //DEBUG_show_fft_res(patch);
+    fft_tools.complex_abs(patch, patch_im);
+    //DEBUG_show_fft_res(patch);
+
+    fft_tools.spherical_mapping(bufR, bufI, patch);
+
+    //DEBUG_show_spherical_buf(bufR, bw);
+    //DEBUG_show_fft_res(patch);
+    //printf("end-----------------------------------\n");
+
+    return;
+    */
     return;
 }
 
@@ -431,9 +485,15 @@ void run_block_matching(const uchar* __restrict d_noisy_volume,
 // ======================================= Rotation Matching ================================
 // ==========================================================================================
 
+__device__ void clear_patch(float* patch, int n) {
+    for (int i = 0; i < n * n * n; i++)
+        patch[i] = 0.0;
+}
+
 __device__ void fill_patch(const uchar* __restrict d_noisy_volume, float* patch, const uint3 size, const uint3 coord, int k)
 {
-    memset(patch, 0, k * k * k * sizeof(float));
+    //memset(patch, 0, k * k * k * sizeof(float));
+    clear_patch(patch, k);
     int pind, vind;
     int px, py, pz;
     int vx, vy, vz;
@@ -448,6 +508,7 @@ __device__ void fill_patch(const uchar* __restrict d_noisy_volume, float* patch,
                 patch[pind] = (float) d_noisy_volume[vind];
             }
 }
+
 __device__ void apply_mask(float* patch, float* mask, int k)
 {
     for (int i = 0; i < k * k * k; i++) {
@@ -552,6 +613,9 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                      float *mask_Sphere,
                                      float *d_ref_patchs,
                                      float *d_cmp_patchs,
+                                     float *d_patchs_im,
+                                     float *d_buf_re,
+                                     float *d_buf_im,
                                      double *d_sigR, double *d_sigI,
                                      double *d_patR, double *d_patI,
                                      double *d_so3SigR, double *d_so3SigI,
@@ -584,6 +648,7 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
 
     int patchsize = params_patch_size;
     int patch_bsize = patchsize * patchsize * patchsize; // size of the patch
+    int patch_buf_bsize;
 
     for (tz_batchind = 0; tz_batchind < tshape.z; tz_batchind += batchsizeZ) {
         // printf("Processing %d layers among %d total\n", tz_batchind + batchsizeZ, tshape.z);
@@ -614,6 +679,11 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     float* cmp_patch = &d_cmp_patchs[mem_offset * patch_bsize];
                     double* patR = &d_patR[mem_offset * sigpatSig_bsize];
                     double* patI = &d_patI[mem_offset * sigpatSig_bsize];
+
+                    // pre-allocated workspace for buffers used in fft
+                    float* patch_im = &d_patchs_im[mem_offset * patch_bsize];
+                    float* buf_re = &d_buf_re[mem_offset * patch_buf_bsize];
+                    float* buf_im = &d_buf_im[mem_offset * patch_buf_bsize];
                     
                     // pre-allocated workspace for cusoft
                     double* so3SigR = &d_so3SigR[mem_offset * so3Sig_bsize];
@@ -632,7 +702,9 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     
                     fill_patch(d_noisy_volume, ref_patch, size, ref_coord, patchsize); // fill the reference patch
                     apply_mask(ref_patch, mask_Gaussian, patchsize);
-                    fft_shift_3d(ref_patch, sigR, sigI, patchsize, bwIn); // compute fftshift for the reference patch
+                    clear_patch(patch_im, patchsize); // clear patch_im for future fft
+                    fft_shift_3d(ref_patch, patch_im, buf_re, buf_im, sigR, sigI, patchsize, bwIn); // compute fftshift for the reference patch
+
                     // range of searching
                     int wxb = fmaxf(0, vx_ref - params_window_size); // window x begin
                     int wyb = fmaxf(0, vy_ref - params_window_size); // window y begin
@@ -641,16 +713,16 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     int wye = fminf(size.y - params_patch_size, vy_ref + params_window_size); // window y end
                     int wze = fminf(size.z - params_patch_size, vz_ref + params_window_size); // window z end
 
-
                     for (vz_cmp = wzb; vz_cmp <= wze; vz_cmp++)
                         for (vy_cmp = wyb; vy_cmp <= wye; vy_cmp++)
                             for (vx_cmp = wxb; vx_cmp <= wxe; vx_cmp++){
-
+                                printf("One run started: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                                 // printf("%d, %d, %d\n", vx_cmp, vy_cmp, vz_cmp);
                                 uint3 cmp_coord = make_uint3(vx_cmp, vy_cmp, vz_cmp);
                                 fill_patch(d_noisy_volume, cmp_patch, size, cmp_coord, patchsize); // fill the reference patch
                                 apply_mask(cmp_patch, mask_Gaussian, patchsize);
-                                fft_shift_3d(cmp_patch, patR, patI, patchsize, bwIn); // compute fftshift for the reference patch
+                                clear_patch(patch_im, patchsize); // clear patch_im for future fft
+                                fft_shift_3d(cmp_patch, patch_im, buf_re, buf_im, patR, patI, patchsize, bwIn); // compute fftshift for the reference patch
 
                                 rotateRef rrf = dist_rot(d_noisy_volume, 
                                                       mask_Sphere,
@@ -677,7 +749,9 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                                 rrf,
                                                 params_maxN);
                                 }
+                                printf("One run finished: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                             }
+                    printf("Finished: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                 }
     }
     
@@ -694,6 +768,9 @@ void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
                             float *mask_Sphere,
                             float *d_ref_patchs,
                             float *d_cmp_patchs,
+                            float *d_patchs_im,
+                            float *d_buf_re,
+                            float *d_buf_im,
                             double *d_sigR, double *d_sigI,
                             double *d_patR, double *d_patI,
                             double *d_so3SigR, double *d_so3SigI,
@@ -719,7 +796,9 @@ void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
     std::cout << "Total number of reference patches " << (tshape.x*tshape.y*tshape.z) << std::endl;
 
     // TODO: optimize the kernel call to enhance speed.
-    dim3 blocks_test(tshape.x, tshape.y, batchsizeZ);
+    //dim3 blocks_test(tshape.x, tshape.y, batchsizeZ);
+    //printf("%d, %d, %d---------------------------\n", tshape.x, tshape.y, batchsizeZ);
+    dim3 blocks_test(18, 12, 2);
     dim3 grid_test(1, 1, 1);
     // k_block_matching_rot <<< grid, block >>>(d_noisy_volume,
     k_block_matching_rot <<< blocks_test, grid_test >>>(d_noisy_volume,
@@ -737,6 +816,9 @@ void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                             mask_Sphere,
                                             d_ref_patchs,
                                             d_cmp_patchs,
+                                            d_patchs_im,
+                                            d_buf_re,
+                                            d_buf_im,
                                             d_sigR, d_sigI,
                                             d_patR, d_patI,
                                             d_so3SigR, d_so3SigI,
