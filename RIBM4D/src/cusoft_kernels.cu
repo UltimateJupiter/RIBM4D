@@ -29,7 +29,7 @@ void sample_run(double *d_sigR, double *d_sigI,
 {
     FILE *fp;
     int i;
-    // int sig_n = bwIn * 2;
+    int sig_n = bwIn * 2;
     double *sigCoefR_test, *sigCoefI_test;
     double *patCoefR_test, *patCoefI_test;
 
