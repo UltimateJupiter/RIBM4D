@@ -37,7 +37,7 @@ int main(int argc, char* argv[]) {
     reader.read(parameters.input_filename, noisy_image, width, height, depth);
     std::cout << "Volume size: (" << width << ", " << height << ", " << depth
                         << ") total: " << width * height * depth << std::endl;
-    // reader.read(parameters.gt_filename, gt, width, height, depth);
+    reader.read(parameters.gt_filename, gt, width, height, depth);
 
     // Run first step of BM4D
     std::cout << "\nRun first step of BM4D: " << std::endl;

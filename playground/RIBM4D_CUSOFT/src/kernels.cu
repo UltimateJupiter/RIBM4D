@@ -182,26 +182,67 @@ __device__ rotateRef make_rotateRef_sim(uint x, uint y, uint z, float4 sim) {
     rrf.y = y;
     rrf.z = z;
     rrf.val = sim.w;
+    
+    // we are referencing the coordinates, so apply the inverse rotation
+    rrf.alpha = -sim.z;
+    rrf.beta = -sim.y;
+    rrf.gamma = -sim.x;
+    // printf("%f, %f, %f\n", rrf.alpha, rrf.beta, rrf.gamma);
 
     // Compute rotation matrix
-    float sa = sin(sim.x), ca = cos(sim.x);
-    float sb = sin(sim.y), cb = cos(sim.y);
-    float sg = sin(sim.z), cg = cos(sim.z);
+    float sa = sin(rrf.alpha), ca = cos(rrf.alpha);
+    float sb = sin(rrf.beta), cb = cos(rrf.beta);
+    float sg = sin(rrf.gamma), cg = cos(rrf.gamma);
     
-    rrf.v1x = cb * cg;
-    rrf.v1y = cb * sg;
-    rrf.v1z = -sb;
+    // Calculating the ZYZ rotation matrix
+    rrf.v1x = ca * cb * cg - sa * sg;
+    rrf.v1y = sa * cb * cg + ca * sg;
+    rrf.v1z = -sb * cg;
 
-    rrf.v2x = sa * sb * cg - ca * sb;
-    rrf.v2y = sa * sb * sg + ca * cb;
-    rrf.v2z = sa * cb;
+    rrf.v2x = -ca * cb * sg - sa * cg;
+    rrf.v2y = -sa * cb * sg + ca * cg;
+    rrf.v2z = sb * sg;
 
-    rrf.v3x = ca * sb * cg + sa * sg;
-    rrf.v3y = ca * sb * sg - sa * cg;
-    rrf.v3z = ca * cb;
+    rrf.v3x = ca * sb;
+    rrf.v3y = sa * sb;
+    rrf.v3z = cb;
 
     return rrf;
 }
+
+// Make the inverse rrf object
+__device__ rotateRef invert_rotateRef_sim(rotateRef rrf) {
+    rotateRef rrf_inv;
+    rrf_inv.x = rrf.x;
+    rrf_inv.y = rrf.y;
+    rrf_inv.z = rrf.z;
+    rrf_inv.val = rrf.val;
+
+    rrf_inv.alpha = -rrf.gamma;
+    rrf_inv.beta  = -rrf.beta;
+    rrf_inv.gamma = -rrf.alpha;
+
+    // Compute rotation matrix
+    float sa = sin(rrf_inv.alpha), ca = cos(rrf_inv.alpha);
+    float sb = sin(rrf_inv.beta),  cb = cos(rrf_inv.beta);
+    float sg = sin(rrf_inv.gamma), cg = cos(rrf_inv.gamma);
+    
+    // Calculating the ZYZ rotation matrix
+    rrf_inv.v1x = ca * cb * cg - sa * sg;
+    rrf_inv.v1y = sa * cb * cg + ca * sg;
+    rrf_inv.v1z = -sb * cg;
+
+    rrf_inv.v2x = -ca * cb * sg - sa * cg;
+    rrf_inv.v2y = -sa * cb * sg + ca * cg;
+    rrf_inv.v2z = sb * sg;
+
+    rrf_inv.v3x = ca * sb;
+    rrf_inv.v3y = sa * sb;
+    rrf_inv.v3z = cb;
+
+    return rrf_inv;
+}
+
 
 // inference within patch after rotation
 __device__ float rotTex3D(rotateRef rrf, int px, int py, int pz, float pshift) {
@@ -210,9 +251,9 @@ __device__ float rotTex3D(rotateRef rrf, int px, int py, int pz, float pshift) {
     float fpy = (float)py - pshift;
     float fpz = (float)pz - pshift;
     
-    float rpx = fpx * rrf.v1x + fpx * rrf.v2x + fpx * rrf.v3x + pshift + rrf.x;
-    float rpy = fpy * rrf.v1y + fpy * rrf.v2y + fpy * rrf.v3y + pshift + rrf.y;
-    float rpz = fpz * rrf.v1z + fpz * rrf.v2z + fpz * rrf.v3z + pshift + rrf.z;
+    float rpx = fpx * rrf.v1x + fpy * rrf.v2x + fpz * rrf.v3x + pshift + rrf.x;
+    float rpy = fpx * rrf.v1y + fpy * rrf.v2y + fpz * rrf.v3y + pshift + rrf.y;
+    float rpz = fpx * rrf.v1z + fpy * rrf.v2z + fpz * rrf.v3z + pshift + rrf.z;
 
     return tex3D(noisy_volume_3d_tex, rpx + 0.5f, rpy + 0.5f, rpz + 0.5f) * 255;
 }
@@ -329,12 +370,12 @@ __global__ void k_check_texture_sync(const uchar* d_noisy_volume, uint3 imshape,
     float diff = 0.0;
     float pshift = ((float) patchsize - 1.0) / 2.0;
     for (int x = 0; x < imshape.x; x++)
-        for (int y = 0; y < imshape.y; y++)
-            for (int z = 0; z < imshape.z; z++) {
+        for (int y = 0; y < imshape.y-1; y++)
+            for (int z = 0; z < imshape.z-2; z++) {
                 float4 trivial_angle = make_float4(0., 0., 0., 0.);
                 rotateRef rrf = make_rotateRef_sim(x, y, z, trivial_angle);
-                int vind = x + y * imshape.x + z * imshape.x * imshape.y;
-                diff += abs((float) d_noisy_volume[vind] - rotTex3D(rrf, 0, 0, 0, pshift));
+                int vind = (x) + (y+1) * imshape.x + (z+2) * imshape.x * imshape.y;
+                diff += abs((float) d_noisy_volume[vind] - rotTex3D(rrf, 0, 1, 2, pshift));
             }
     printf("average difference in synchronization: %f\n", diff / (imshape.x * imshape.y * imshape.z));
 }
@@ -542,10 +583,10 @@ __device__ void add_stack_rot(rotateRef* d_stack_rot,
 __device__ rotateRef dist_rot(const uchar* __restrict d_noisy_volume, // the input patch
     const float* __restrict mask,
     const uint3 sig_ref, // reference point of the signal patch (base)
-    const uint3 pat_ref, // reference point of the pattern patch (new)
+    const uint3 pat_ref, // reference point of the pattern patch (cmp)
     const uint3 size, // shape of image
     const int patch_width, // width of the patch
-    double *sigR, double *sigI, // fft results od ref
+    double *sigR, double *sigI, // fft results of ref
     double *patR, double *patI, // fft results of cmp
     double *so3SigR, double *so3SigI, // workspaces for cusoft
     double *workspace1, double *workspace2,
@@ -569,21 +610,24 @@ __device__ rotateRef dist_rot(const uchar* __restrict d_noisy_volume, // the inp
         seminaive_naive_table,
         bwIn, bwOut, degLim); // rotation for cmp (pattern) to match ref (signal)
         
-    rotateRef cmpref = make_rotateRef_sim(sig_ref.x, sig_ref.y, sig_ref.z, soft_rot);
+    rotateRef cmpref = make_rotateRef_sim(pat_ref.x, pat_ref.y, pat_ref.z, soft_rot);
+    // rotateRef cmpref = make_rotateRef_sim(pat_ref.x, pat_ref.y, pat_ref.z, make_float4(0, 0, 0, 0));
 
     // signal is the base patch, pattern is the new patch to be rotated.
     int k = patch_width;
     float pshift = (float(k) - 1) / 2.0;
+    // printf("sigref: %d, %d, %d\n", sig_ref.x, sig_ref.y, sig_ref.z);
+    // printf("patref: %d, %d, %d\n", pat_ref.x, pat_ref.y, pat_ref.z);
 
-    int pind, sig_vind;
+    int sig_vind;
     float diff = 0.0;
     for (int pz = 0; pz < k; ++pz)
         for (int py = 0; py < k; ++py)
             for (int px = 0; px < k; ++px) {
-                pind = px + py * k + pz * k * k;
+                // pind = px + py * k + pz * k * k;
                 sig_vind = (px + sig_ref.x) + (py + sig_ref.y) * size.x + (pz + sig_ref.z) * size.x * size.y;
                 float diff_pix = (float) d_noisy_volume[sig_vind] - rotTex3D(cmpref, px, py, pz, pshift);
-                diff_pix *= mask[pind];
+                // diff_pix *= mask[pind];
                 diff += diff_pix * diff_pix;
             }
     cmpref.val = diff / (k*k*k);
@@ -633,6 +677,8 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
     int so3Sig_bsize = 8 * bwOut * bwOut * bwOut;
     int SNT_bsize = (bwIn + 1);
     int cos_even_bsize = bwIn;
+    int tsize = tshape.x * tshape.y * tshape.z;
+    int log_offset = tsize / 20 + 1;
 
     int tx_ref, ty_ref, tz_ref, vx_ref, vy_ref, vz_ref;
     int vx_cmp, vy_cmp, vz_cmp;
@@ -695,7 +741,6 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     apply_mask(ref_patch, mask_Gaussian, patchsize);
                     clear_patch(patch_im, patchsize); // clear patch_im for future fft
                     fft_shift_3d(ref_patch, patch_im, buf_re, buf_im, sigR, sigI, patchsize, bwIn); // compute fftshift for the reference patch
-                    printf("%d, %d, %d offset %d fft ref done\n", tx_ref, ty_ref, tz_ref, mem_offset);
 
                     // range of searching
                     int wxb = fmaxf(0, vx_ref - params_window_size); // window x begin
@@ -735,7 +780,7 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                                       seminaive_naive_table,
                                                       bwIn, bwOut, degLim);
                                 // printf("One run disrot done: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
-                                
+                                // printf("%f\n", rrf.val);
                                 if (rrf.val < params_sim_th){
                                     // printf("Dist %f\n", rrf.val);
                                     add_stack_rot(&d_stacks_rot[(tx_ref + (ty_ref + tz_ref* tshape.y)*tshape.x)*params_maxN],
@@ -745,7 +790,9 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                 }
                                 // printf("One run finished: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                             }
-                    printf("Finished: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
+
+                    if ((mem_offset + 1) % log_offset == 0)
+                        printf("Finished: patch %d / %d\n", mem_offset + 1, tsize);
                 }
     }
     
@@ -789,12 +836,8 @@ void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
     // Debug verification
     std::cout << "Total number of reference patches " << (tshape.x*tshape.y*tshape.z) << std::endl;
 
-    // TODO: optimize the kernel call to enhance speed.
     dim3 blocks_test(tshape.x, tshape.y, batchsizeZ);
-    //printf("%d, %d, %d---------------------------\n", tshape.x, tshape.y, batchsizeZ);
-    // dim3 blocks_test(18, 12, 2);
     dim3 grid_test(1, 1, 1);
-    // k_block_matching_rot <<< grid, block >>>(d_noisy_volume,
     k_block_matching_rot <<< blocks_test, grid_test >>>(d_noisy_volume,
                                             size,
                                             tshape,
@@ -905,6 +948,8 @@ void gather_cubes(const uchar* __restrict img,
     uint array_size = (tshape.x*tshape.y*tshape.z);
     int threads = d_prop.maxThreadsPerBlock;
     int bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(params.maxN*array_size / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(params.maxN*array_size / threads);
+    
+    
     k_nstack_to_pow <<< bs_x, threads >>>(d_stacks, d_nstacks, params.maxN*array_size, params.maxN);
     checkCudaErrors(cudaGetLastError());
     thrust::device_ptr<uint> dt_nstacks = thrust::device_pointer_cast(d_nstacks);
@@ -979,6 +1024,7 @@ __global__ void k_gather_cubes_rot(cudaArray* d_noisy_volume_3d,
                 for (int x = 0; x < params.patch_size; ++x){
                     int stack_idx = i*cube_size + (x)+(y + z*params.patch_size)*params.patch_size;
                     d_gathered4dstack_rot[stack_idx] = rotTex3D(rrf, x, y, z, pshift);
+                    // printf("%f\n", d_gathered4dstack_rot[stack_idx]);
                 }
     }
 }
@@ -1005,8 +1051,12 @@ void gather_cubes_rot(cudaArray* d_noisy_volume_3d,
     // Convert all the numbers in d_nstacks to the lowest power of two
     bind_texture(d_noisy_volume_3d);
     uint array_size = (tshape.x*tshape.y*tshape.z);
-    int threads = d_prop.maxThreadsPerBlock;
+    int threads = d_prop.maxThreadsPerBlock / 2;
     int bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(params.maxN*array_size / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(params.maxN*array_size / threads);
+    if (bs_x == 0) bs_x++;
+
+    printf("arraysize:%d, %d, %d\n", array_size, bs_x, threads);
+    
     k_nstack_rot_to_pow <<< bs_x, threads >>>(d_stacks_rot, d_nstacks_rot, params.maxN*array_size, params.maxN);
     checkCudaErrors(cudaGetLastError());
     thrust::device_ptr<uint> dt_nstacks_rot = thrust::device_pointer_cast(d_nstacks_rot);
@@ -1034,6 +1084,8 @@ void gather_cubes_rot(cudaArray* d_noisy_volume_3d,
     //std::cout << "Allocated " << sizeof(float)*(gather_stacks_sum*params.patch_size*params.patch_size*params.patch_size) << " bytes for gathered4dstack" << std::endl;
 
     bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(gather_stacks_sum_rot / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(gather_stacks_sum_rot / threads);
+    if (bs_x == 0) bs_x++;
+    printf("gather_stacks_sum_rot:%d, %d, %d\n", gather_stacks_sum_rot, bs_x, threads);
     k_gather_cubes_rot <<<  bs_x, threads >>> (d_noisy_volume_3d, size, params, d_stacks_rot, gather_stacks_sum_rot, d_gathered4dstack_rot);
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
@@ -1093,6 +1145,8 @@ __global__ void dct3d(float* d_gathered4dstack, int patch_size, uint gather_stac
 void run_dct3d(float* d_gathered4dstack, uint gather_stacks_sum, int patch_size, const cudaDeviceProp &d_prop){
     int threads = patch_size*patch_size*patch_size;
     int bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(gather_stacks_sum / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(gather_stacks_sum / threads);
+    if (bs_x == 0) bs_x = 1;
+    
     dct3d <<< bs_x, dim3(patch_size, patch_size, patch_size) >>> (d_gathered4dstack, patch_size, gather_stacks_sum);
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
@@ -1148,6 +1202,7 @@ __global__ void idct3d(float* d_gathered4dstack, int patch_size, uint gather_sta
 void run_idct3d(float* d_gathered4dstack, uint gather_stacks_sum, int patch_size, const cudaDeviceProp &d_prop){
     int threads = patch_size*patch_size*patch_size;
     int bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(gather_stacks_sum / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(gather_stacks_sum / threads);
+    if (bs_x == 0) bs_x = 1;
     idct3d <<< bs_x, dim3(patch_size, patch_size, patch_size) >>> (d_gathered4dstack, patch_size, gather_stacks_sum);
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
@@ -1281,6 +1336,7 @@ void run_wht_ht_iwht(float* d_gathered4dstack,
     checkCudaErrors(cudaMemset(d_group_weights, 0.0, sizeof(float)*groups*patch_size*patch_size*patch_size));
     int threads = params.patch_size*params.patch_size*params.patch_size;
     int bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(groups / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(groups / threads);
+    if (bs_x == 0) bs_x = 1;
     k_run_wht_ht_iwht <<< bs_x, dim3(params.patch_size, params.patch_size, params.patch_size) >>> (d_gathered4dstack, groups, patch_size, d_nstacks, d_accumulated_nstacks, d_group_weights, params.hard_th);
     cudaDeviceSynchronize();
     checkCudaErrors(cudaGetLastError());
@@ -1453,4 +1509,197 @@ void run_aggregation(float* final_image,
     checkCudaErrors(cudaFree(d_weights_volume));
     checkCudaErrors(cudaFree(d_accumulated_nstacks));
 
+}
+
+// ==========================================================================================
+// ==================================== Rot Aggregation =====================================
+// ==========================================================================================
+
+__device__ float trilinear_interp(const float* data, float x, float y, float z, int N) {
+    float cap = (float) N - 1.0;
+    x = max(0.0, min(x, cap));
+    y = max(0.0, min(y, cap));
+    z = max(0.0, min(z, cap));
+    
+    int x0 = int(x);
+    int y0 = int(y);
+    int z0 = int(z);
+ 
+    float xd = x - floor(x);
+    float yd = y - floor(y);
+    float zd = z - floor(z);
+ 
+    int x1 = int(ceil(x));
+    int y1 = int(ceil(y));
+    int z1 = int(ceil(z));
+ 
+    // c000, c001
+    float c00 = data[x0 * N * N + y0 * N + z0] * (1 - xd) +
+                data[x1 * N * N + y0 * N + z0] * xd;
+ 
+    // c001, c101
+    float c01 = data[x0 * N * N + y0 * N + z1] * (1 - xd) +
+                data[x1 * N * N + y0 * N + z1] * xd;
+ 
+    // c010, c110
+    float c10 = data[x0 * N * N + y1 * N + z0] * (1 - xd) +
+                data[x1 * N * N + y1 * N + z0] * xd;
+ 
+    // c011, c111
+    float c11 = data[x0 * N * N + y1 * N + z1] * (1 - xd) +
+                data[x1 * N * N + y1 * N + z1] * xd;
+ 
+    float c0 = c00 * (1 - yd) + c10 * yd;
+    float c1 = c01 * (1 - yd) + c11 * yd;
+ 
+    // result of trilinear interpolation
+    float c = c0 * (1 - zd) + c1 * zd;
+ 
+    return c;
+}
+
+__device__ float rot_inference_inverse(const float* data, rotateRef rrf_inv, int x, int y, int z, int N, float pshift)
+{
+    float px, py, pz;
+    float u = (float)N - 0.75f;
+    float l = -0.25f;
+    px = (float)x - pshift;
+    py = (float)y - pshift;
+    pz = (float)z - pshift;
+
+    float rpx = px * rrf_inv.v1x + py * rrf_inv.v2x + pz * rrf_inv.v3x + pshift;
+    float rpy = px * rrf_inv.v1y + py * rrf_inv.v2y + pz * rrf_inv.v3y + pshift;
+    float rpz = px * rrf_inv.v1z + py * rrf_inv.v2z + pz * rrf_inv.v3z + pshift;
+
+    if ((rpx > u || rpx < l) || (rpy > u || rpy < l) || (rpz > u || rpz < l)) {
+        return -1;
+    }
+    else {
+        return trilinear_interp(data, rpx, rpy, rpz, N);
+    }
+}
+
+__global__ void k_aggregation_rot(float* d_denoised_volume,
+                             float* d_weights_volume,
+                             const uint3 size,
+                             const uint3 tshape,
+                             const float* d_gathered4dstack,
+                             rotateRef* d_stacks,
+                             uint* d_nstacks,
+                             float* group_weights,
+                             const bm4d_gpu::Parameters params,
+                             const uint* d_accumulated_nstacks)
+{
+    uint groups = (tshape.x*tshape.y*tshape.z);
+    int stride = params.patch_size*params.patch_size*params.patch_size;
+    float pshift = (float)params.patch_size / 2.0 - 0.5;
+    for (int i = blockIdx.x*blockDim.x + threadIdx.x; i < groups; i += blockDim.x*gridDim.x){
+
+        if (i >= groups) return;
+
+        float weight = group_weights[i*stride];
+        int patches = d_nstacks[i];
+        int group_beginning = d_accumulated_nstacks[i];
+        printf("group %d, weight %f\n", i, weight);
+        //printf("Weight for the group %d is %f\n", i, weight);
+        //printf("Num of patches %d\n", patches);
+        //printf("Group beginning %d\n", group_beginning);
+        //if (i > 15) return;
+        for (int p = 0; p < patches; ++p){
+            rotateRef ref = d_stacks[group_beginning + p];
+            rotateRef ref_inv = invert_rotateRef_sim(ref);
+
+            int edge_correction = floor((((float)params.patch_size - 1.0) / 2) * 1.5);
+
+            for (int z = -edge_correction; z < params.patch_size + edge_correction; ++z)
+                for (int y = -edge_correction; y < params.patch_size + edge_correction; ++y)
+                    for (int x = -edge_correction; x < params.patch_size + edge_correction; ++x){
+                        int rx = x + ref.x;
+                        int ry = y + ref.y;
+                        int rz = z + ref.z;
+
+                        if (rx < 0 || rx >= size.x) continue;
+                        if (ry < 0 || ry >= size.y) continue;
+                        if (rz < 0 || rz >= size.z) continue;
+
+                        int img_idx = (rx)+(ry)*size.x + (rz)*size.x*size.y;
+                        long long int stack_start_idx = group_beginning*stride + p*stride;
+                        const float* denoised_patch = &d_gathered4dstack[stack_start_idx];
+
+                        float tmp = rot_inference_inverse(denoised_patch, ref_inv, x, y, z, params.patch_size, pshift);
+                        
+                        if (tmp != -1.0) {
+                            // printf("%f\n", tmp);
+                            __syncthreads();
+                            atomicAdd(&d_denoised_volume[img_idx], tmp*weight);
+                            atomicAdd(&d_weights_volume[img_idx], weight);
+                        }
+                    }
+        }
+    }
+}
+
+__global__ void k_normalizer_rot(float* d_denoised_volume,
+                                const float* __restrict d_weights_volume,
+                                const uint3 size)
+{
+    int im_size = size.x*size.y*size.z;
+    for (int i = blockDim.x * blockIdx.x + threadIdx.x; i < im_size; i += blockDim.x*gridDim.x)
+            {
+                if (i >= im_size) return;
+                float tmp = d_denoised_volume[i];
+                __syncthreads();
+                d_denoised_volume[i] = tmp / d_weights_volume[i];
+            }
+}
+
+void run_aggregation_rot(float* final_image,
+                     const uint3 size,
+                     const uint3 tshape,
+                     const float* d_gathered4dstack,
+                     rotateRef* d_stacks,
+                     uint* d_nstacks,
+                     float* d_group_weights,
+                     const bm4d_gpu::Parameters params,
+                     int gather_stacks_sum,
+                     const cudaDeviceProp &d_prop)
+{
+    int im_size = size.x*size.y*size.z;
+    int groups = tshape.x*tshape.y*tshape.z;
+
+
+    // Accumulate nstacks through sum
+    uint* d_accumulated_nstacks;
+    checkCudaErrors(cudaMalloc((void **)&d_accumulated_nstacks, sizeof(uint)*groups));
+    thrust::device_ptr<uint> dt_accumulated_nstacks = thrust::device_pointer_cast(d_accumulated_nstacks);
+    thrust::device_ptr<uint> dt_nstacks = thrust::device_pointer_cast(d_nstacks);
+    thrust::exclusive_scan(dt_nstacks, dt_nstacks + groups, dt_accumulated_nstacks);
+    d_accumulated_nstacks = thrust::raw_pointer_cast(dt_accumulated_nstacks);
+    cudaDeviceSynchronize();
+    checkCudaErrors(cudaGetLastError());
+
+    float* d_denoised_volume, *d_weights_volume;
+    checkCudaErrors(cudaMalloc((void **)&d_denoised_volume, sizeof(float)*size.x*size.y*size.z));
+    checkCudaErrors(cudaMalloc((void **)&d_weights_volume, sizeof(float)*size.x*size.y*size.z));
+    checkCudaErrors(cudaMemset(d_denoised_volume, 0.0, sizeof(float)*size.x*size.y*size.z));
+    checkCudaErrors(cudaMemset(d_weights_volume, 0.0, sizeof(float)*size.x*size.y*size.z));
+    int threads = 128;
+    int bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(groups / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(groups / threads);
+    if (bs_x == 0) bs_x++;
+    
+    printf("Begin Aggregation Kernel Call\n");
+    k_aggregation_rot <<< bs_x, threads >>>(d_denoised_volume, d_weights_volume, size, tshape, d_gathered4dstack, d_stacks, d_nstacks, d_group_weights, params, d_accumulated_nstacks);
+    cudaDeviceSynchronize();
+    checkCudaErrors(cudaGetLastError());
+    threads = 128;
+    bs_x = std::ceil(d_prop.maxGridSize[1] / threads) < std::ceil(im_size / threads) ? std::ceil(d_prop.maxGridSize[1] / threads) : std::ceil(im_size / threads);
+    if (bs_x == 0) bs_x++;
+    printf("Begin Normalization\n");
+    k_normalizer_rot <<< bs_x, threads >>>(d_denoised_volume, d_weights_volume, size);
+    cudaDeviceSynchronize();
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaMemcpy(final_image, d_denoised_volume, sizeof(float)*im_size, cudaMemcpyDeviceToHost));
+    checkCudaErrors(cudaFree(d_denoised_volume));
+    checkCudaErrors(cudaFree(d_weights_volume));
+    checkCudaErrors(cudaFree(d_accumulated_nstacks));
 }

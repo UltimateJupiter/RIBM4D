@@ -37,7 +37,8 @@ int main(int argc, char* argv[]) {
     AllReader reader(false);             // true - show debug video on load
     reader.read(parameters.input_filename, noisy_image, width, height, depth);
     std::cout << "Volume size: (" << width << ", " << height << ", " << depth << ") total: " << width * height * depth << std::endl;
-    // reader.read(parameters.gt_filename, gt, width, height, depth);
+    if (!parameters.gt_filename.empty())
+        reader.read(parameters.gt_filename, gt, width, height, depth);
 
     // Run first step of BM4D
     std::cout << "\nRun first step of BM4D: " << std::endl;

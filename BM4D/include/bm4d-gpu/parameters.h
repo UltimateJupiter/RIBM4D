@@ -36,8 +36,8 @@ struct Parameters {
     }
 
     if (argc >= 2) input_filename = argv[1];
-    if (argc >= 3) output_filename = argv[2];
-    if (argc >= 4) gt_filename = argv[3];
+    if (argc >= 3) gt_filename = argv[2];
+    if (argc >= 4) output_filename = argv[3];
     if (argc >= 5) sim_th = std::atof(argv[4]);
     if (argc >= 6) hard_th = std::atof(argv[5]);
 

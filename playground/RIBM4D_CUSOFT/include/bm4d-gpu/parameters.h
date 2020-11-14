@@ -15,14 +15,14 @@ struct Parameters {
   std::string output_filename;
   std::string gt_filename;
   // float sim_th{2500.0f};  // Similarity threshold for the first step
-  float sim_th{1500.0f};  // Similarity threshold for the first step
+  float sim_th{2500.0f};  // Similarity threshold for the first step
   float hard_th{2.7f};    // Hard schrinkage threshold
 
   // Can be changed but not advisable
   // int window_size{5};  // Search window, barely affects the results [Lebrun M., 2013]
-  int window_size{3};  // Search window, barely affects the results [Lebrun M., 2013]
+  int window_size{5};  // Search window, barely affects the results [Lebrun M., 2013]
   // int step_size{3};    // Reasonable values {1,2,3,4}
-  int step_size{20};    // Reasonable values {1,2,3,4}
+  int step_size{3};    // Reasonable values {1,2,3,4}
                        // Significantly (exponentially) affects speed,
                        // slightly affect results
   int gpu_device = -1;
@@ -39,8 +39,8 @@ struct Parameters {
     }
 
     if (argc >= 2) input_filename = argv[1];
-    if (argc >= 3) output_filename = argv[2];
-    if (argc >= 4) gt_filename = argv[3];
+    if (argc >= 3) gt_filename = argv[2];
+    if (argc >= 4) output_filename = argv[3];
     if (argc >= 5) sim_th = std::atof(argv[4]);
     if (argc >= 6) hard_th = std::atof(argv[5]);
 

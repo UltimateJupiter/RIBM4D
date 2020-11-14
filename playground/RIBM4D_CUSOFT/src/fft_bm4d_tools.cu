@@ -323,9 +323,9 @@ __device__ float trilinear_interpolation(float* data_re, float x, float y, float
    int y0 = int(y);
    int z0 = int(z);
 
-   float xd = x - ceil(x);
-   float yd = y - ceil(y);
-   float zd = z - ceil(z);
+   float xd = x - floor(x);
+   float yd = y - floor(y);
+   float zd = z - floor(z);
 
    int x1 = int(ceil(x));
    int y1 = int(ceil(y));

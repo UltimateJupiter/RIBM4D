@@ -80,8 +80,12 @@ struct rotateRef {
     float v3y;
     float v3z;
 
-    __host__ __device__ rotateRef() : x(0), y(0), z(0), val(-1), v1x(1), v1y(0), v1z(0), v2x(0), v2y(1), v2z(0), v3x(0), v3y(0), v3z(1){};
-    __host__ __device__ rotateRef(uint x, uint y, uint z, float val, float v1x, float v1y, float v1z, float v2x, float v2y, float v2z, float v3x, float v3y, float v3z) : x(x), y(y), z(z), val(val), v1x(v1x), v1y(v1y), v1z(v1z), v2x(v2x), v2y(v2y), v2z(v2z), v3x(v3x), v3y(v3y), v3z(v3z){}
+    float alpha;
+    float beta;
+    float gamma;
+
+    __host__ __device__ rotateRef() : x(0), y(0), z(0), val(-1), v1x(1), v1y(0), v1z(0), v2x(0), v2y(1), v2z(0), v3x(0), v3y(0), v3z(1), alpha(0.0), beta(0.0), gamma(0.0){};
+    __host__ __device__ rotateRef(uint x, uint y, uint z, float val, float v1x, float v1y, float v1z, float v2x, float v2y, float v2z, float v3x, float v3y, float v3z, float alpha, float beta, float gamma) : x(x), y(y), z(z), val(val), v1x(v1x), v1y(v1y), v1z(v1z), v2x(v2x), v2y(v2y), v2z(v2z), v3x(v3x), v3y(v3y), v3z(v3z), alpha(alpha), beta(beta), gamma(gamma){}
 };
 
 void bind_texture(cudaArray* d_noisy_volume_3d);
@@ -147,6 +151,11 @@ void run_idct3d(float* d_gathered4dstack, uint gather_stacks_sum, int patch_size
 // Aggregate
 void run_aggregation(float* final_image, const uint3 size, const uint3 tshape,
                      const float* d_gathered4dstack, uint3float1* d_stacks, uint* d_nstacks,
+                     float* group_weights, const bm4d_gpu::Parameters params, int gather_stacks_sum,
+                     const cudaDeviceProp& d_prop);
+
+void run_aggregation_rot(float* final_image, const uint3 size, const uint3 tshape,
+                     const float* d_gathered4dstack, rotateRef* d_stacks, uint* d_nstacks,
                      float* group_weights, const bm4d_gpu::Parameters params, int gather_stacks_sum,
                      const cudaDeviceProp& d_prop);
 
