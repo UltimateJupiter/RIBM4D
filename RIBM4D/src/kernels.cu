@@ -1213,7 +1213,7 @@ __global__ void k_aggregation_rot(float* d_denoised_volume,
             rotateRef ref = d_stacks[group_beginning + p];
             rotateRef ref_inv = invert_rotateRef_sim(ref);
 
-            int edge_correction = floor((((float)params.patch_size - 1.0) / 2) * 1.5);
+            int edge_correction = floor((((float)params.patch_size - 1.0) / 2) * 0.75);
 
             for (int z = -edge_correction; z < params.patch_size + edge_correction; ++z)
                 for (int y = -edge_correction; y < params.patch_size + edge_correction; ++y)

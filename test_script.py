@@ -8,6 +8,6 @@ def launch_job(executable, noisy_fl, gt_fl, out_fl='./tmp', sim_th=2500.0, hard_
     print(sbatch_job)
     os.system(sbatch_job)
 
-launch_job(bm4d_bin, "./data/3j7h_cropped_center_avi/3j7h_center_noisy_0.20.avi", "./data/3j7h_cropped_center_avi/3j7h_center_original.avi", special_info="3j7h_center_noisy_0.20")
+launch_job(bm4d_bin, noisy_fl="./data/3j7h_cropped_center_avi/3j7h_center_noisy_0.20.avi", gt_fl="./data/3j7h_cropped_center_avi/3j7h_center_original.avi", special_info="RIBM4D_3j7h_center_noisy_0.20")
 
 # TODO: Write a for loop?
