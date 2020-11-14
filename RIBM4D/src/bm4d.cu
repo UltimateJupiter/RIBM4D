@@ -126,7 +126,7 @@ std::vector<uchar> BM4D::run_first_step() {
     // std::cout << "Acquied size " << gather_stacks_sum << std::endl;
     gatheringcubes.stop();
     std::cout << "Gathering cubes took: " << gatheringcubes.getSeconds() << std::endl;
-    debug_kernel(d_gathered4dstack);
+    // debug_kernel(d_gathered4dstack);
     // return noisy_volume;
     
     checkCudaErrors(cudaFree(d_noisy_volume));
@@ -136,7 +136,7 @@ std::vector<uchar> BM4D::run_first_step() {
     run_dct3d(d_gathered4dstack, gather_stacks_sum, params.patch_size, d_prop);
     dct_forward.stop();
     std::cout << "3D DCT forwards took: " << dct_forward.getSeconds() << std::endl;
-    debug_kernel(d_gathered4dstack);
+    // debug_kernel(d_gathered4dstack);
 
     // Do WHT in 4th dim + Hard Thresholding + IWHT
     float* d_group_weights;
@@ -150,7 +150,7 @@ std::vector<uchar> BM4D::run_first_step() {
     run_idct3d(d_gathered4dstack, gather_stacks_sum, params.patch_size, d_prop);
     dct_backward.stop();
     std::cout << "3D DCT backwards took: " << dct_backward.getSeconds() << std::endl;
-    debug_kernel(d_gathered4dstack);
+    // debug_kernel(d_gathered4dstack);
 
 
     // Aggregate

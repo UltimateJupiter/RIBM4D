@@ -623,7 +623,8 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     int wxe = fminf(size.x - params_patch_size, vx_ref + params_window_size); // window x end
                     int wye = fminf(size.y - params_patch_size, vy_ref + params_window_size); // window y end
                     int wze = fminf(size.z - params_patch_size, vz_ref + params_window_size); // window z end
-
+                    if ((mem_offset + 1) % 1000 == 0 || mem_offset == 100)
+                        printf("Begin: patch %d / %d\n", mem_offset + 1, tsize);
                     for (vz_cmp = wzb; vz_cmp <= wze; vz_cmp++)
                         for (vy_cmp = wyb; vy_cmp <= wye; vy_cmp++)
                             for (vx_cmp = wxb; vx_cmp <= wxe; vx_cmp++){
@@ -665,7 +666,7 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                 // printf("One run finished: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                             }
 
-                    if ((mem_offset + 1) % log_offset == 0)
+                    if ((mem_offset + 1) % 1000 == 0 || mem_offset == 100)
                         printf("Finished: patch %d / %d\n", mem_offset + 1, tsize);
                 }
     }
