@@ -45,6 +45,7 @@
 
 /* the following is for memset */
 #include <string.h>
+#include <stdio.h>
 
 #include <math.h>
 #include <cusoft/CUutils_so3.cuh>
@@ -1203,6 +1204,7 @@ __device__ void Inverse_SO3_Naive_sym( int bw,
   double *rdataPtr, *idataPtr ;
   double *rcoeffsPtr, *icoeffsPtr ;
   double dn ;
+//   printf("Begin inverse softcorr\n");
 
   n = 2 * bw ;
   t1r = workspace1 ;
@@ -1225,8 +1227,7 @@ __device__ void Inverse_SO3_Naive_sym( int bw,
   CosEvalPts( n, cosPts );
   SinEvalPts2( n, sinPts2 );
   CosEvalPts2( n, cosPts2 );
-
-
+  
   /* Stage 0.5: Need to normalize the numbers before
      doing the IDWT
   */

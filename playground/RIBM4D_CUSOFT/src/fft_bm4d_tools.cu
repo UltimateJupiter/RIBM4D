@@ -18,7 +18,7 @@
 //     B = B_;
 // }
 
-__device__ const int fftshift[64] = {42, 43, 40, 41, 46, 47, 44, 45, 34, 35, 32, 33, 38, 39, 36, 37, 58, 59, 56, 57, 62, 63, 60, 61, 50, 51, 48, 49, 54, 55, 52, 53, 10, 11, 8, 9, 14, 15, 12, 13, 2, 3, 0, 1, 6, 7, 4, 5, 26, 27, 24, 25, 30, 31, 28, 29, 18, 19, 16, 17, 22, 23, 20, 21};
+__device__ __constant__ int fftshift[64] = {42, 43, 40, 41, 46, 47, 44, 45, 34, 35, 32, 33, 38, 39, 36, 37, 58, 59, 56, 57, 62, 63, 60, 61, 50, 51, 48, 49, 54, 55, 52, 53, 10, 11, 8, 9, 14, 15, 12, 13, 2, 3, 0, 1, 6, 7, 4, 5, 26, 27, 24, 25, 30, 31, 28, 29, 18, 19, 16, 17, 22, 23, 20, 21};
 
 //In-place 3-d fftshift
 __device__ void fft_bm4d_tools::fftshift_3d_in(float* data_re, float* data_im) {
@@ -115,6 +115,7 @@ __device__ void fft_bm4d_tools::ifftshift_3d_in(float* data_re, float* data_im) 
     fftshift_3d_in(data_re, data_im);
 }
 
+// __device__ void stockham(float x_re[], float x_im[], int n, int flag, int n2, float y_re[], float y_im[])
 __device__ void stockham(float x_re[], float x_im[], int n, int flag, int n2, float y_re[], float y_im[])
 {
     float  *y_orig_re, *y_orig_im, *tmp_re, *tmp_im;

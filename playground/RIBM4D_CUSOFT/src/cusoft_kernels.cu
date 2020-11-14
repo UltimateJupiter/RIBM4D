@@ -136,35 +136,40 @@ __device__ float4 soft_corr(double *sigR, double *sigI,
     double **seminaive_naive_table,
     int bwIn, int bwOut, int degLim)
 {
+    // printf("softcorr begin\n");
     int i;
     int tmp, ii, jj, kk;
     float maxval = 0.0;
     int maxloc = 9;
     int n = bwIn * 2; // input shape
-
+    
     INPLACE_SemiNaive_Naive_Pml_Table(bwIn,
         bwIn,
         seminaive_naive_table,
         seminaive_naive_tablespace,
         workspace2);
+    // printf("softcorr1\n");
     
     PREALLOC_FST_semi_memo(sigR, sigI,
-            sigCoefR, sigCoefI,
-            n, seminaive_naive_table,
-            workspace2, 1, bwIn,
-            cos_even);
-    
+        sigCoefR, sigCoefI,
+        n, seminaive_naive_table,
+        workspace2, 1, bwIn,
+        cos_even);
+    // printf("softcorr2\n");
+        
     PREALLOC_FST_semi_memo(patR, patI,
             patCoefR, patCoefI,
             n, seminaive_naive_table,
             workspace2, 1, bwIn,
             cos_even);
+    // printf("softcorr3\n");
 
     /* combine coefficients */
     so3CombineCoef( bwIn, bwOut, degLim,
             sigCoefR, sigCoefI,
             patCoefR, patCoefI,
             so3CoefR, so3CoefI ) ;
+    // printf("softcorr4\n");
 
     /* now inverse so(3) */
     Inverse_SO3_Naive_sym( bwOut,
@@ -172,6 +177,7 @@ __device__ float4 soft_corr(double *sigR, double *sigI,
                 so3SigR, so3SigI,
                 workspace1, workspace2,
                 1 );
+    // printf("softcorr5\n");
 
     maxloc = 0;
     for (i = 0; i < 8*bwOut*bwOut*bwOut; i++) {
@@ -194,7 +200,5 @@ __device__ float4 soft_corr(double *sigR, double *sigI,
     float gamma = M_PI * kk / ((float) bwOut);
 
     // printf("alpha = %f  beta = %f  gamma = %f\n", alpha, beta, gamma);
-    
-
     return make_float4(alpha, beta, gamma, 0.0);
 }

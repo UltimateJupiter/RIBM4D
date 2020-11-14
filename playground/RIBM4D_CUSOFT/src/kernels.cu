@@ -253,31 +253,25 @@ __device__ void DEBUG_show_buf(float* buf) {
 // Update the bufferR and bufferI with the result computed based on patch (of size k*k*k)
 __device__ void fft_shift_3d(float* patch, float* patch_im, float* patch_buf_re, float* patch_buf_im, double* bufR, double* bufI, int k, int bw)
 {
-    /*
     //printf("one fft-----------------------------------\n");
     struct fft_bm4d_tools fft_tools(k, bw);
     //DEBUG_show_fft_res(patch);
     //DEBUG_show_fft_res(patch_im);
-
     fft_tools.ifftshift_3d_in(patch, patch_im);
     //DEBUG_show_fft_res(patch);
     //DEBUG_show_fft_res(patch_im);
     fft_tools.fft_3d(patch, patch_im, patch_buf_re, patch_buf_im);
+    // printf("Done2\n");
     //DEBUG_show_fft_res(patch);
     //DEBUG_show_fft_res(patch_im);
     fft_tools.fftshift_3d_in(patch, patch_im);
     //DEBUG_show_fft_res(patch);
     fft_tools.complex_abs(patch, patch_im);
     //DEBUG_show_fft_res(patch);
-
     fft_tools.spherical_mapping(bufR, bufI, patch);
-
     //DEBUG_show_spherical_buf(bufR, bw);
     //DEBUG_show_fft_res(patch);
     //printf("end-----------------------------------\n");
-
-    return;
-    */
     return;
 }
 
@@ -329,8 +323,6 @@ __device__ __inline__ uint flp2(uint x)
     x = x | (x >> 16);
     return x - (x >> 1);
 }
-
-
 
 __global__ void k_check_texture_sync(const uchar* d_noisy_volume, uint3 imshape, int patchsize)
 {
@@ -648,7 +640,7 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
 
     int patchsize = params_patch_size;
     int patch_bsize = patchsize * patchsize * patchsize; // size of the patch
-    int patch_buf_bsize;
+    int patch_buf_bsize = patchsize * patchsize;
 
     for (tz_batchind = 0; tz_batchind < tshape.z; tz_batchind += batchsizeZ) {
         // printf("Processing %d layers among %d total\n", tz_batchind + batchsizeZ, tshape.z);
@@ -667,7 +659,6 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     int tz_offset = tz_ref - tz_batchind;
                     int mem_offset = tz_offset * tshape.x * tshape.y + ty_ref * tshape.x + tx_ref; // memory location in the batch buffer
                     // if (mem_offset > 10) return;
-                    printf("%d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                     // construct the reference patch
                     uint3 ref_coord = make_uint3(vx_ref, vy_ref, vz_ref);
 
@@ -704,6 +695,7 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     apply_mask(ref_patch, mask_Gaussian, patchsize);
                     clear_patch(patch_im, patchsize); // clear patch_im for future fft
                     fft_shift_3d(ref_patch, patch_im, buf_re, buf_im, sigR, sigI, patchsize, bwIn); // compute fftshift for the reference patch
+                    printf("%d, %d, %d offset %d fft ref done\n", tx_ref, ty_ref, tz_ref, mem_offset);
 
                     // range of searching
                     int wxb = fmaxf(0, vx_ref - params_window_size); // window x begin
@@ -716,13 +708,14 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                     for (vz_cmp = wzb; vz_cmp <= wze; vz_cmp++)
                         for (vy_cmp = wyb; vy_cmp <= wye; vy_cmp++)
                             for (vx_cmp = wxb; vx_cmp <= wxe; vx_cmp++){
-                                printf("One run started: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
+                                // printf("One run started: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                                 // printf("%d, %d, %d\n", vx_cmp, vy_cmp, vz_cmp);
                                 uint3 cmp_coord = make_uint3(vx_cmp, vy_cmp, vz_cmp);
                                 fill_patch(d_noisy_volume, cmp_patch, size, cmp_coord, patchsize); // fill the reference patch
                                 apply_mask(cmp_patch, mask_Gaussian, patchsize);
                                 clear_patch(patch_im, patchsize); // clear patch_im for future fft
                                 fft_shift_3d(cmp_patch, patch_im, buf_re, buf_im, patR, patI, patchsize, bwIn); // compute fftshift for the reference patch
+                                // printf("One run fft done: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
 
                                 rotateRef rrf = dist_rot(d_noisy_volume, 
                                                       mask_Sphere,
@@ -741,6 +734,7 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                                       cos_even,
                                                       seminaive_naive_table,
                                                       bwIn, bwOut, degLim);
+                                // printf("One run disrot done: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                                 
                                 if (rrf.val < params_sim_th){
                                     // printf("Dist %f\n", rrf.val);
@@ -749,7 +743,7 @@ __global__ void k_block_matching_rot(const uchar* __restrict d_noisy_volume,
                                                 rrf,
                                                 params_maxN);
                                 }
-                                printf("One run finished: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
+                                // printf("One run finished: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                             }
                     printf("Finished: %d, %d, %d offset %d\n", tx_ref, ty_ref, tz_ref, mem_offset);
                 }
@@ -796,9 +790,9 @@ void run_block_matching_rot(const uchar* __restrict d_noisy_volume,
     std::cout << "Total number of reference patches " << (tshape.x*tshape.y*tshape.z) << std::endl;
 
     // TODO: optimize the kernel call to enhance speed.
-    //dim3 blocks_test(tshape.x, tshape.y, batchsizeZ);
+    dim3 blocks_test(tshape.x, tshape.y, batchsizeZ);
     //printf("%d, %d, %d---------------------------\n", tshape.x, tshape.y, batchsizeZ);
-    dim3 blocks_test(18, 12, 2);
+    // dim3 blocks_test(18, 12, 2);
     dim3 grid_test(1, 1, 1);
     // k_block_matching_rot <<< grid, block >>>(d_noisy_volume,
     k_block_matching_rot <<< blocks_test, grid_test >>>(d_noisy_volume,

@@ -21,6 +21,7 @@ struct Parameters {
   // Can be changed but not advisable
   // int window_size{5};  // Search window, barely affects the results [Lebrun M., 2013]
   int window_size{3};  // Search window, barely affects the results [Lebrun M., 2013]
+  // int step_size{3};    // Reasonable values {1,2,3,4}
   int step_size{20};    // Reasonable values {1,2,3,4}
                        // Significantly (exponentially) affects speed,
                        // slightly affect results

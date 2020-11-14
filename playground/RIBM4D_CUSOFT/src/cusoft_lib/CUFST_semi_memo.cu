@@ -73,9 +73,10 @@ __device__ void PREALLOC_FST_semi_memo(double *rdata, double *idata,
   int tmpindex[2];
   double pow_one;
 //   double *cos_even;
-  double tmpA ;
+  double tmpA;
 
   bw = size/2;
+
 
   /* assign space */
 
@@ -93,7 +94,7 @@ __device__ void PREALLOC_FST_semi_memo(double *rdata, double *idata,
 
   /* do the FFTs along phi */
   grid_fourier(rdata, idata, rres, ires, size, scratchpad);
-
+  
   /* scale intermediary coefficients */
   tmpA = sqrt(2. * PI) ;
   for ( i = 0 ; i < size*size ; i ++ )
@@ -290,9 +291,6 @@ __device__ void PREALLOC_FST_semi_memo(double *rdata, double *idata,
 	}
       }
     }
-  
-  free(cos_even);
-
 }
 
 /************************************************************************/
